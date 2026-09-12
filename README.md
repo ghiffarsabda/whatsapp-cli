@@ -35,7 +35,8 @@ wa <command>  ──NDJSON over a Unix socket──▶  daemon
 ## Install
 
 ```bash
-git clone <this repo> && cd whatsapp-cli
+git clone https://github.com/ghiffarsabda/whatsapp-cli.git
+cd whatsapp-cli
 npm install
 npm run build
 npm link            # puts `wa` on your PATH
