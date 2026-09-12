@@ -1,6 +1,6 @@
 # whatsapp-cli
 
-A terminal WhatsApp client with **persistent login**, text messages only. Built to be driven equally well by humans and AI agents.
+A fast, feature-packed terminal WhatsApp client with **persistent login**, voice note playback & sending, image viewing (Ctrl+Click), documents, contact search, group sync, and responsive TUI chat cards. Built to be driven equally well by humans and AI agents.
 
 Log in once. After that every command just works — across daemon restarts and reboots — because credentials live on disk and a background daemon keeps the connection alive.
 
@@ -98,8 +98,11 @@ login    [--phone <n>] [--wait] [--timeout <ms>]   link this device (one-time)
 logout   --yes                                     unlink and delete credentials
 status                                             daemon + connection state
 chats    [--limit <n>] [--search <t>] [--unread]   chats by recent activity
+contacts [--limit <n>] [--search <t>]              list contacts and groups
+sync                                               sync groups and contacts from device
 read     <chat> [--limit <n>] [--since <ts>] [--before <ts>]
-send     <chat> <text|-> [--body-file <path>]
+send     <chat> <text|-> [--image <path>] [--voice <path>] [--document <path>] [--caption <t>]
+play     <chat> [messageId]                        listen to voice notes or audio
 watch    [chat] [--once] [--timeout <ms>]          stream incoming messages
 wait     <chat> [--timeout <ms>] [--include-from-me]
 search   <query> [--chat <chat>] [--limit <n>] [--since <ts>]
@@ -110,25 +113,60 @@ schema                                             machine-readable self-descrip
 
 `<chat>` accepts a full JID, a phone number (`+62811...`), an exact contact or group name, or a unique name substring.
 
+### Sending Media & Voice Notes
+
+You can send media from the CLI or directly from within the TUI composer:
+
+- **CLI flags**:
+  ```bash
+  wa send Budi --voice ./note.ogg
+  wa send Budi --image ./photo.jpg --caption "vacation picture"
+  wa send Budi --document ./report.pdf --caption "quarterly report"
+  ```
+- **Composer / CLI syntax**:
+  ```
+  @voice /path/to/audio.ogg
+  @image /path/to/picture.jpg Optional caption here
+  @document /path/to/invoice.pdf Invoice for March
+  ```
+
+### Listening to Voice Notes & Viewing Images
+
+- Inbound voice notes and audio are automatically decrypted and saved locally under `~/.local/share/whatsapp-cli/media/<chat>/`.
+- Run `wa play <chat>` to listen to the latest voice note via `mpv`, `ffplay`, or `aplay`.
+- In the TUI, press `p` to play the most recent voice note in the active chat, or `v` to view the most recent image in your default image viewer.
+- Image paths are also rendered as terminal OSC 8 hyperlinks (`file:///...`), allowing **Ctrl+Click** directly inside modern terminals (GNOME Terminal, iTerm2, Alacritty, Windows Terminal, VS Code).
+
 ## Interactive UI
 
-`wa tui` is a full-screen client for the same daemon: a chat list on the left, the conversation on the right, a composer along the bottom, and a footer showing connection state and unread totals.
+`wa tui` is a fast full-screen client: chat cards on the left, full message stream on the right, composer along the bottom, and connection status in the footer.
 
-```
-┌─ Budi (2) ───────┐┌─ Budi ────────────────────────────────┐
-│ ▸ Budi        (2)││ 20:14 Budi: halo                      │
-│   Team Standup   ││ 20:15 me: hi back                     │
-└──────────────────┘└───────────────────────────────────────┘
-> press i to write
-j/k move · enter open · tab pane · q quit        open
-```
+- **Chat Room Cards**: Every conversation (direct or group) is rendered in its own distinct card with `[GRP]` / `[DIR]` tags, full names, timestamp, and unread badges.
+- **Contact Search & New Chats (`n` or `/`)**: Press `n` or `/` from the chat list to search your address book and group directory. Type any name, number, or JID, and press `enter` to immediately open or start the chat.
+- **Auto-Sync & Reconnect**: Automatically re-syncs participating groups and missed messages upon network reconnection. You can also press `s` anytime to trigger a manual sync.
+- **Full Contact Names**: Displays full address book contact names rather than just first names or fallback push names.
+- **Historical Messages**: Seamlessly displays history for both group chats and 1-on-1 conversations, with `o` to load older messages.
 
-| Pane | Keys |
-|---|---|
-| **Chat list** | `j`/`k` or arrows move (wraps) · `g`/`G` first/last · `enter` or `l` open · `/` write · `q` quit |
-| **Messages** | `j`/`k` or arrows scroll · `pgup`/`pgdn` page · `o` load older · `G` jump to newest · `i` or `enter` write · `q` quit |
-| **Composer** | `enter` send · `esc` back to the list · `←`/`→` move the caret · `↑`/`↓` message history · `ctrl+a`/`ctrl+e` line ends · `ctrl+u` clear |
-| **Anywhere** | `tab` cycle panes · `ctrl+c` quit |
+| Context | Keys | Action |
+|---|---|---|
+| **Chat list** | `j`/`k` or `↑`/`↓` | Navigate chat cards |
+| | `enter` or `l` | Open selected chat |
+| | `n` or `/` | Search contacts or start new chat |
+| | `s` | Sync device & group chats |
+| | `q` | Quit |
+| **Messages** | `j`/`k` or `↑`/`↓` | Scroll messages |
+| | `o` | Load older history |
+| | `G` | Jump to newest messages |
+| | `p` | Play selected/latest voice note |
+| | `v` | View selected/latest image |
+| | `i` or `enter` | Jump to composer |
+| | `q` | Quit |
+| **Composer** | `enter` | Send message (supports `@voice`, `@image`, `@document`) |
+| | `esc` | Back to chat cards |
+| | `←`/`→` | Move caret |
+| | `ctrl+u` | Clear line |
+| **Anywhere** | `tab` | Cycle pane focus |
+| | `ctrl+c` | Force quit |
 
 Notes:
 
@@ -144,8 +182,9 @@ Everything is XDG-compliant and overridable with `WHATSAPP_CLI_DATA_DIR`.
 ```
 ~/.local/share/whatsapp-cli/
 ├── auth/                 credentials (0700) — delete this to force a re-login
+├── media/                decrypted media (voice notes, images, documents)
 ├── messages.jsonl        append-only source of truth, one JSON message per line
-├── chats.json            chat index snapshot: names, unread counts
+├── chats.json            chat and contact index snapshot: names, unread counts
 ├── state.json            live daemon state — `cat` it to check connection status
 └── daemon.log            daemon logs
 
@@ -155,7 +194,7 @@ $XDG_RUNTIME_DIR/whatsapp-cli/daemon.sock    control socket (0600)
 A message record looks like this:
 
 ```json
-{"id":"3EB0...","chat":"628111@s.whatsapp.net","chatName":"Budi","from":"628111@s.whatsapp.net","fromName":"Budi","fromMe":false,"ts":1757673600,"type":"text","text":"halo","replyTo":null}
+{"id":"3EB0...","chat":"628111@s.whatsapp.net","chatName":"Budi","from":"628111@s.whatsapp.net","fromName":"Budi","fromMe":false,"ts":1757673600,"type":"audio","text":"[voice note 0:34]","mediaPath":"/home/.../media/...ogg","duration":34,"replyTo":null}
 ```
 
 Set an explicit `WHATSAPP_CLI_DATA_DIR` (or `--data-dir`) and the socket moves inside it too, so isolated instances never collide.
@@ -187,7 +226,7 @@ systemctl --user enable --now whatsapp-cli
 
 ```bash
 npm run build       # tsc -> dist/
-npm test            # node:test, 108 tests
+npm test            # node:test, 125 tests
 npm run typecheck
 npm run dev -- status   # run from source via tsx
 ```
@@ -198,14 +237,17 @@ src/
 ├── cli/                   output contract, IPC client, auto-spawn, commands
 ├── daemon/                Baileys connection, IPC server, methods, store, ingest
 ├── tui/                   Ink app, keymap, view logic, components
-└── shared/                paths, errors, protocol, JID handling
+└── shared/                paths, errors, protocol, JID handling, media player
 ```
 
-The two files worth reading first are `src/cli/output.ts` (the agent-facing contract) and `src/daemon/baileys.ts` (the reconnect state machine).
+The files worth reading first are `src/cli/output.ts` (the agent-facing contract) and `src/daemon/baileys.ts` (the reconnect and media handling state machine).
 
-## v1 scope
+## Features
 
-Text in and out. Deliberately **not** included: media download/upload, reactions, edits, deletes, read receipts, presence, group administration, broadcasts, stories, multi-account. `search` is a linear scan over the log and is documented as such.
+- **Text & Media**: Supports text messages, voice notes (`.ogg`/`.mp3` with opus/ptt), images, and documents.
+- **Group & Direct Chat History**: Group subjects, participating chats, and contact names are automatically indexed and synced across restarts.
+- **Snappy Terminal UI**: Visual chat cards, instant contact fuzzy finder modal, terminal hyperlinks (Ctrl+Click), and hotkeys for media playback (`p`) and viewing (`v`).
+- **Resilient & Reconnecting**: Auto-syncs missed events upon network reconnection; credentials and message stores survive daemon restarts.
 
 ## Caveats
 
