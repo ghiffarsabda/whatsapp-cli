@@ -11,6 +11,7 @@ wa chats
 wa read Budi --limit 20
 wa watch                      # stream incoming messages
 wa wait Budi --timeout 60000  # block until Budi replies
+wa tui                        # full-screen UI: browse, read, reply
 ```
 
 ---
@@ -103,10 +104,38 @@ watch    [chat] [--once] [--timeout <ms>]          stream incoming messages
 wait     <chat> [--timeout <ms>] [--include-from-me]
 search   <query> [--chat <chat>] [--limit <n>] [--since <ts>]
 daemon   start|stop|restart|status|logs [--follow] [--lines <n>]
+tui                                                interactive full-screen UI (TTY only)
 schema                                             machine-readable self-description
 ```
 
 `<chat>` accepts a full JID, a phone number (`+62811...`), an exact contact or group name, or a unique name substring.
+
+## Interactive UI
+
+`wa tui` is a full-screen client for the same daemon: a chat list on the left, the conversation on the right, a composer along the bottom, and a footer showing connection state and unread totals.
+
+```
+┌─ Budi (2) ───────┐┌─ Budi ────────────────────────────────┐
+│ ▸ Budi        (2)││ 20:14 Budi: halo                      │
+│   Team Standup   ││ 20:15 me: hi back                     │
+└──────────────────┘└───────────────────────────────────────┘
+> press i to write
+j/k move · enter open · tab pane · q quit        open
+```
+
+| Pane | Keys |
+|---|---|
+| **Chat list** | `j`/`k` or arrows move (wraps) · `g`/`G` first/last · `enter` or `l` open · `/` write · `q` quit |
+| **Messages** | `j`/`k` or arrows scroll · `pgup`/`pgdn` page · `o` load older · `G` jump to newest · `i` or `enter` write · `q` quit |
+| **Composer** | `enter` send · `esc` back to the list · `←`/`→` move the caret · `↑`/`↓` message history · `ctrl+a`/`ctrl+e` line ends · `ctrl+u` clear |
+| **Anywhere** | `tab` cycle panes · `ctrl+c` quit |
+
+Notes:
+
+- It needs a real terminal. Piped or redirected invocations exit `2` rather than loading React, and `--json` is rejected for the same reason.
+- Incoming messages stream in over the daemon's existing subscription, so the chat list re-sorts and unread badges update live. A chat you have open never counts as unread.
+- It refuses to start when not logged in (exit `3`); run `wa login` first.
+- Messages are held in memory per chat (newest 300) and marked read through the daemon, so the same history shows up in `wa read` afterwards.
 
 ## Where things live
 
@@ -158,7 +187,7 @@ systemctl --user enable --now whatsapp-cli
 
 ```bash
 npm run build       # tsc -> dist/
-npm test            # node:test, 53 tests
+npm test            # node:test, 108 tests
 npm run typecheck
 npm run dev -- status   # run from source via tsx
 ```
@@ -168,6 +197,7 @@ src/
 ├── bin/wa.ts              entry point, flag parsing, exit-code mapping
 ├── cli/                   output contract, IPC client, auto-spawn, commands
 ├── daemon/                Baileys connection, IPC server, methods, store, ingest
+├── tui/                   Ink app, keymap, view logic, components
 └── shared/                paths, errors, protocol, JID handling
 ```
 

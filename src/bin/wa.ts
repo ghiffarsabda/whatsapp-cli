@@ -11,6 +11,7 @@ import { schemaCommand } from '../cli/commands/schema.js'
 import { searchCommand } from '../cli/commands/search.js'
 import { sendCommand } from '../cli/commands/send.js'
 import { statusCommand } from '../cli/commands/status.js'
+import { tuiCommand } from '../cli/commands/tui.js'
 import { waitCommand } from '../cli/commands/wait.js'
 import { watchCommand } from '../cli/commands/watch.js'
 import { emitError, resolveOutputOptions, type OutputOptions } from '../cli/output.js'
@@ -238,6 +239,11 @@ addSharedFlags(program.command('daemon').description('control the background dae
       ),
     )
   })
+
+addSharedFlags(program.command('tui').description('interactive terminal UI (requires a TTY)')).action(
+  (options, command: Command) =>
+    run(command, () => tuiCommand(outputFor(command))),
+)
 
 program
   .command('schema')

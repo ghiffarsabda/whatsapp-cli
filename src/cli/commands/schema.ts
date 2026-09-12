@@ -147,6 +147,17 @@ const COMMANDS: CommandSpec[] = [
     exitCodes: [0, 4],
   },
   {
+    name: 'tui',
+    summary: 'Interactive full-screen terminal UI: chat list, message pane, composer.',
+    flags: [],
+    output: 'None. Paints the terminal and restores it on exit.',
+    notes: [
+      'Requires an interactive TTY; exits 2 when piped or redirected.',
+      'Keys: j/k move · enter open · i write · o load older · tab pane · q quit.',
+    ],
+    exitCodes: [0, 2, 3, 4],
+  },
+  {
     name: 'schema',
     summary: 'Print this machine-readable description of the CLI.',
     output: 'This document.',
