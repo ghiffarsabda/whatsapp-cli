@@ -9,6 +9,7 @@ import { ChatList } from '../src/tui/components/ChatList.js'
 import { MessagePane } from '../src/tui/components/MessagePane.js'
 import { Footer } from '../src/tui/components/Footer.js'
 import { Composer } from '../src/tui/components/Composer.js'
+import { ContactSearch } from '../src/tui/components/ContactSearch.js'
 
 function msg(overrides: Partial<MessageRecord> = {}): MessageRecord {
   return {
@@ -225,3 +226,86 @@ test('Footer surfaces a transient status message', () => {
   assert.match(frame, /close/)
   assert.match(frame, /G newest/)
 })
+
+test('ContactSearch renders matching contacts and chats', () => {
+  const contacts = [
+    { jid: '628111@s.whatsapp.net', name: 'Alice Walker', notify: 'Alice', phone: '628111', isGroup: false },
+  ]
+  const chats = [
+    chat({ jid: '1203630@g.us', name: 'Weekend Hikers', isGroup: true }),
+  ]
+  const { lastFrame } = render(
+    <ContactSearch
+      contacts={contacts}
+      chats={chats}
+      width={60}
+      height={15}
+      onSelect={() => {}}
+      onClose={() => {}}
+    />,
+  )
+  const frame = lastFrame() ?? ''
+  assert.match(frame, /Search Contacts/)
+  assert.match(frame, /Alice Walker/)
+  assert.match(frame, /Weekend Hikers/)
+  assert.match(frame, /\[GRP\]/)
+  assert.match(frame, /\[DIR\]/)
+})
+
+test('ContactSearch filters and selects contact on Enter', async () => {
+  const contacts = [
+    { jid: '628111@s.whatsapp.net', name: 'Alice Walker', notify: 'Alice', phone: '628111', isGroup: false },
+    { jid: '628222@s.whatsapp.net', name: 'Bob Builder', notify: 'Bob', phone: '628222', isGroup: false },
+  ]
+  let selectedJid = ''
+  const { stdin } = render(
+    <ContactSearch
+      contacts={contacts}
+      chats={[]}
+      width={60}
+      height={15}
+      onSelect={(jid) => { selectedJid = jid }}
+      onClose={() => {}}
+    />,
+  )
+  // Type 'Bob' then wait for state update, then enter
+  stdin.write('Bob')
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  stdin.write('\r')
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  assert.equal(selectedJid, '628222@s.whatsapp.net')
+})
+
+test('MessagePane renders media indicators for voice notes and images', () => {
+  const messages = [
+    msg({
+      id: 'vn1',
+      type: 'audio',
+      text: '[voice note 0:42]',
+      mediaPath: '/tmp/vn1.ogg',
+      duration: 42,
+    }),
+    msg({
+      id: 'img1',
+      type: 'image',
+      text: '[image photo.jpg]',
+      mediaPath: '/tmp/photo.jpg',
+    }),
+  ]
+  const { lastFrame } = render(
+    <MessagePane
+      messages={messages}
+      activeChat={chat()}
+      historyOffset={0}
+      hiddenOlder={0}
+      width={70}
+      height={15}
+    />,
+  )
+  const frame = lastFrame() ?? ''
+  assert.match(frame, /\[voice note 0:42\]/)
+  assert.match(frame, /press 'p' to play/)
+  assert.match(frame, /\[image photo.jpg\]/)
+  assert.match(frame, /press 'v'/)
+})
+
