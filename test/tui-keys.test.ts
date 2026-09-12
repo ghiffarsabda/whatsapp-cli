@@ -65,7 +65,15 @@ test('load-older and jump-to-newest are reachable', () => {
 
 test('writing is reachable from both panes', () => {
   assert.deepEqual(resolveKey('i', noKey, 'messages'), { type: 'focus-composer' })
-  assert.deepEqual(resolveKey('/', noKey, 'list'), { type: 'focus-composer' })
+  assert.deepEqual(resolveKey('i', noKey, 'list'), { type: 'focus-composer' })
+})
+
+test('contact search, sync, and media actions are reachable', () => {
+  assert.deepEqual(resolveKey('/', noKey, 'list'), { type: 'search-contacts' })
+  assert.deepEqual(resolveKey('n', noKey, 'list'), { type: 'search-contacts' })
+  assert.deepEqual(resolveKey('s', noKey, 'list'), { type: 'sync-device' })
+  assert.deepEqual(resolveKey('p', noKey, 'messages'), { type: 'play-media' })
+  assert.deepEqual(resolveKey('v', noKey, 'messages'), { type: 'view-media' })
 })
 
 test('hints mention the newest-chat jump only when scrolled back', () => {

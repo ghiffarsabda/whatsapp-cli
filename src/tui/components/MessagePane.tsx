@@ -11,6 +11,7 @@ export interface MessagePaneProps {
   width: number
   height: number
   meName: string | null
+  contactNames?: Record<string, string>
 }
 
 export function MessagePane({
@@ -22,8 +23,11 @@ export function MessagePane({
   width,
   height,
   meName,
+  contactNames,
 }: MessagePaneProps) {
-  const title = chatJid ? displayName(chatJid, chatName) : 'no chat selected'
+  const fullChatName = chatJid
+    ? contactNames?.[chatJid] ?? displayName(chatJid, chatName)
+    : 'no chat selected'
   const window = visibleWindow(messages, offset, height)
 
   return (
@@ -34,16 +38,40 @@ export function MessagePane({
       borderStyle="round"
       borderColor={isFocused ? 'cyan' : 'gray'}
     >
-      <Box flexDirection="column" height={Math.max(1, height - 2)} justifyContent="flex-end" overflow="hidden">
+      <Box
+        flexDirection="column"
+        height={Math.max(1, height - 2)}
+        justifyContent="flex-end"
+        overflow="hidden"
+      >
         {window.items.length === 0 ? (
-          <Text dimColor>{chatJid ? 'no messages' : title}</Text>
+          <Text dimColor>{chatJid ? 'no messages' : fullChatName}</Text>
         ) : (
           window.items.map((message) => {
             const who = message.fromMe
               ? meName ?? 'me'
-              : displayName(message.from, message.fromName)
+              : contactNames?.[message.from] ?? displayName(message.from, message.fromName)
+
+            const isImage =
+              message.type === 'imageMessage' ||
+              Boolean(message.mediaPath && message.mediaPath.match(/\.(jpe?g|png|webp|gif)$/i))
+            const isAudio =
+              message.type === 'audioMessage' ||
+              Boolean(message.mediaPath && message.mediaPath.match(/\.(ogg|opus|mp3|m4a|wav)$/i))
+            const isDoc =
+              message.type === 'documentMessage' ||
+              Boolean(
+                message.mediaPath && !isImage && !isAudio && !message.mediaPath.endsWith('.txt'),
+              )
+
+            const fileUri = message.mediaPath
+              ? message.mediaPath.startsWith('file://')
+                ? message.mediaPath
+                : `file://${message.mediaPath}`
+              : null
+
             return (
-              <Box key={`${message.chat}\u0000${message.id}`} flexDirection="column">
+              <Box key={`${message.chat}\u0000${message.id}`} flexDirection="column" marginY={0}>
                 <Text wrap="wrap">
                   <Text dimColor>{shortTime(message.ts)} </Text>
                   <Text color={message.fromMe ? 'green' : 'cyan'} bold>
@@ -51,14 +79,45 @@ export function MessagePane({
                   </Text>
                   <Text dimColor>:</Text>
                 </Text>
+
                 <Text wrap="wrap">{message.text}</Text>
+
+                {fileUri && isImage ? (
+                  <Text dimColor wrap="wrap">
+                    {'  '}📷 Ctrl+Click to view:{' '}
+                    <Text underline color="cyan">
+                      {fileUri}
+                    </Text>{' '}
+                    (press 'v')
+                  </Text>
+                ) : null}
+
+                {fileUri && isAudio ? (
+                  <Text dimColor wrap="wrap">
+                    {'  '}🎤 Ctrl+Click to open:{' '}
+                    <Text underline color="cyan">
+                      {fileUri}
+                    </Text>{' '}
+                    (press 'p' to play)
+                  </Text>
+                ) : null}
+
+                {fileUri && isDoc ? (
+                  <Text dimColor wrap="wrap">
+                    {'  '}📄 Ctrl+Click to open:{' '}
+                    <Text underline color="cyan">
+                      {fileUri}
+                    </Text>
+                  </Text>
+                ) : null}
               </Box>
             )
           })
         )}
       </Box>
       <Text dimColor wrap="truncate-end">
-        {title}
+        {fullChatName}
+        {chatJid && !chatJid.includes('@g.us') ? ` (+${chatJid.split('@')[0]})` : ''}
         {window.hiddenOlder > 0 ? ` · ${window.hiddenOlder} older not shown` : ''}
         {!window.atNewest ? ' · scrolled back' : ''}
       </Text>

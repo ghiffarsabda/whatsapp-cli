@@ -96,6 +96,7 @@ async function main(): Promise<void> {
 
   const connection = new WaConnection({
     authDir: target.authDir,
+    mediaDir: target.mediaDir,
     store,
     logger,
     onStateChange: persist,

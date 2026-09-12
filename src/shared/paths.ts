@@ -11,6 +11,7 @@ export interface Paths {
   logFile: string
   lockFile: string
   socketPath: string
+  mediaDir: string
 }
 
 let dataDirOverride: string | undefined
@@ -52,5 +53,6 @@ export function paths(): Paths {
     logFile: join(dataDir, 'daemon.log'),
     lockFile: join(dataDir, 'daemon.lock'),
     socketPath: resolveSocketPath(dataDir, explicit),
+    mediaDir: join(dataDir, 'media'),
   }
 }

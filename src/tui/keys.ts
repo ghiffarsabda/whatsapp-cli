@@ -29,6 +29,10 @@ export type Action =
   | { type: 'scroll-delta'; delta: number }
   | { type: 'scroll-newest' }
   | { type: 'load-older' }
+  | { type: 'search-contacts' }
+  | { type: 'sync-device' }
+  | { type: 'play-media' }
+  | { type: 'view-media' }
 
 const NONE = null
 
@@ -56,7 +60,9 @@ export function resolveKey(input: string, key: KeyLike, pane: Pane): Action | nu
     if (input === 'g') return { type: 'select-first' }
     if (input === 'G') return { type: 'select-last' }
     if (key.return || input === 'l') return { type: 'open-chat' }
-    if (input === '/') return { type: 'focus-composer' }
+    if (input === '/' || input === 'n') return { type: 'search-contacts' }
+    if (input === 'i') return { type: 'focus-composer' }
+    if (input === 's') return { type: 'sync-device' }
     return NONE
   }
 
@@ -67,17 +73,19 @@ export function resolveKey(input: string, key: KeyLike, pane: Pane): Action | nu
   if (key.pageUp) return { type: 'scroll-delta', delta: 10 }
   if (input === 'G') return { type: 'scroll-newest' }
   if (input === 'o') return { type: 'load-older' }
+  if (input === 'p') return { type: 'play-media' }
+  if (input === 'v') return { type: 'view-media' }
   if (input === 'i' || key.return) return { type: 'focus-composer' }
   return NONE
 }
 
 /** Keys shown in the footer for the focused pane. */
 export function hintsFor(pane: Pane, atNewest: boolean): string {
-  if (pane === 'composer') return 'enter send · esc back · tab pane · ctrl+c quit'
+  if (pane === 'composer') return 'enter send · esc back · ctrl+c quit'
   if (pane === 'messages') {
     return atNewest
-      ? 'j/k scroll · o older · i write · tab pane · q quit'
-      : 'j/k scroll · G newest · o older · i write · tab pane · q quit'
+      ? 'j/k scroll · p play · v view · i write · q quit'
+      : 'j/k scroll · G newest · p play · v view · q quit'
   }
-  return 'j/k move · enter open · tab pane · q quit'
+  return 'j/k move · enter open · / search · s sync · q quit'
 }

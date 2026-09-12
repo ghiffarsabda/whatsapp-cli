@@ -82,3 +82,20 @@ export function renderSendResult(result: {
 }): string {
   return `Sent to ${result.chat} (id ${result.messageId})`
 }
+
+export function renderContacts(
+  contacts: Array<{ jid: string; name: string | null; notify: string | null; phone: string | null; isGroup: boolean }>,
+  options: OutputOptions,
+): string {
+  if (contacts.length === 0) return 'No contacts found.'
+
+  return contacts
+    .map((c) => {
+      const kind = c.isGroup ? paint('group', 'cyan', options) : 'direct'
+      const name = c.name ? paint(c.name, 'bold', options) : paint(c.notify ?? shortJid(c.jid), 'dim', options)
+      const phone = c.phone ? ` +${c.phone}` : ''
+      const notify = c.notify && c.name && c.notify !== c.name ? ` (push: ${c.notify})` : ''
+      return `${name}${phone}${notify}\n    ${paint(c.jid, 'dim', options)}  [${kind}]`
+    })
+    .join('\n\n')
+}

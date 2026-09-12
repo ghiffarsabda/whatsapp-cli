@@ -1,11 +1,13 @@
 import { Box, Text, useApp, useInput, useWindowSize } from 'ink'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toErrorPayload } from '../shared/errors.js'
-import type { ChatSummary, MeInfo, MessageRecord } from '../shared/protocol.js'
+import { openImageViewer, playAudio } from '../shared/media-player.js'
+import type { ChatSummary, ContactSummary, MeInfo, MessageRecord } from '../shared/protocol.js'
 import { call, subscribe, type Subscription } from '../cli/ipc-client.js'
 import type { EventFrame } from '../shared/protocol.js'
 import { ChatList } from './components/ChatList.js'
 import { Composer } from './components/Composer.js'
+import { ContactSearch } from './components/ContactSearch.js'
 import { Footer } from './components/Footer.js'
 import { MessagePane } from './components/MessagePane.js'
 import { resolveKey, type Pane } from './keys.js'
@@ -17,6 +19,7 @@ import {
   moveSelection,
   sortChats,
   unreadTotal,
+  visibleWindow,
 } from './logic.js'
 
 const PAGE_SIZE = 100
@@ -34,6 +37,7 @@ export function App({ me, initialConnection }: AppProps) {
   const { columns, rows } = useWindowSize()
 
   const [chats, setChats] = useState<ChatSummary[]>([])
+  const [contacts, setContacts] = useState<ContactSummary[]>([])
   const [selectedIndex, setSelectedIndex] = useState(0)
   const [openChatJid, setOpenChatJid] = useState<string | null>(null)
   const [messages, setMessages] = useState<MessageRecord[]>([])
@@ -43,12 +47,42 @@ export function App({ me, initialConnection }: AppProps) {
   const [status, setStatus] = useState<string | null>(null)
   const [loadingOlder, setLoadingOlder] = useState(false)
   const [hasMoreOlder, setHasMoreOlder] = useState(false)
+  const [isSearchingContacts, setIsSearchingContacts] = useState(false)
 
   // Read inside the input handler without making it a dependency of the handler.
   const openChatRef = useRef<string | null>(null)
   openChatRef.current = openChatJid
   const messagesRef = useRef<MessageRecord[]>([])
   messagesRef.current = messages
+
+  const loadContacts = useCallback(async () => {
+    try {
+      const res = await call<{ contacts: ContactSummary[] }>('contacts', {})
+      setContacts(res.contacts)
+    } catch {
+      // Best effort
+    }
+  }, [])
+
+  const loadChats = useCallback(async () => {
+    try {
+      const loaded = await call<{ chats: ChatSummary[] }>('chats', { limit: 200 })
+      setChats(sortChats(loaded.chats))
+    } catch (error) {
+      setStatus(toErrorPayload(error).message)
+    }
+  }, [])
+
+  const contactMap = useMemo(() => {
+    const map: Record<string, string> = {}
+    for (const c of contacts) {
+      if (c.name) map[c.jid] = c.name
+    }
+    for (const ch of chats) {
+      if (ch.name && !map[ch.jid]) map[ch.jid] = ch.name
+    }
+    return map
+  }, [contacts, chats])
 
   const openChat = useCallback(async (jid: string) => {
     setOpenChatJid(jid)
@@ -84,8 +118,7 @@ export function App({ me, initialConnection }: AppProps) {
       })
       if (result.messages.length > 0) {
         setMessages((existing) => mergeMessages(existing, result.messages))
-        // Prepend means the scroll offset must grow to hold the same view.
-        setOffset((current) => current + result.messages.length)
+        setOffset((cur) => cur + result.messages.length)
       }
       setHasMoreOlder(result.messages.length === PAGE_SIZE)
       setStatus(
@@ -106,15 +139,13 @@ export function App({ me, initialConnection }: AppProps) {
     }
     try {
       await call('send', { chat: jid, text })
-      // The daemon broadcasts the outgoing message back through the
-      // subscription, so there is no optimistic insert here.
       setOffset(0)
     } catch (error) {
       setStatus(`send failed: ${toErrorPayload(error).message}`)
     }
   }, [])
 
-  // Initial load plus the single live subscription for every chat.
+  // Initial load plus live subscription for all chats.
   useEffect(() => {
     let cancelled = false
     let subscription: Subscription | null = null
@@ -123,6 +154,8 @@ export function App({ me, initialConnection }: AppProps) {
       try {
         const loaded = await call<{ chats: ChatSummary[] }>('chats', { limit: 200 })
         if (!cancelled) setChats(sortChats(loaded.chats))
+        const cLoaded = await call<{ contacts: ContactSummary[] }>('contacts', {})
+        if (!cancelled) setContacts(cLoaded.contacts)
       } catch (error) {
         if (!cancelled) setStatus(toErrorPayload(error).message)
       }
@@ -131,7 +164,18 @@ export function App({ me, initialConnection }: AppProps) {
     const onEvent = (frame: EventFrame) => {
       if (frame.event === 'status') {
         const data = frame.data as { connection?: string }
-        if (data.connection) setConnection(data.connection)
+        if (data.connection) {
+          setConnection(data.connection)
+          // Autosync messages and chats when internet reconnects
+          if (data.connection === 'open') {
+            void loadChats()
+            void loadContacts()
+            if (openChatRef.current) {
+              void openChat(openChatRef.current)
+            }
+            setStatus('reconnected · synced')
+          }
+        }
         return
       }
       if (frame.event !== 'message') return
@@ -143,8 +187,6 @@ export function App({ me, initialConnection }: AppProps) {
       if (record.chat !== open) return
 
       setMessages((current) => mergeMessages(current, [record]))
-      // Stay pinned to the newest unless the viewer has scrolled back, in which
-      // case shift the offset so the visible content does not jump.
       setOffset((current) => (current === 0 ? 0 : current + 1))
     }
 
@@ -161,7 +203,7 @@ export function App({ me, initialConnection }: AppProps) {
       cancelled = true
       subscription?.close()
     }
-  }, [])
+  }, [loadChats, loadContacts, openChat])
 
   useEffect(() => {
     if (status === null) return
@@ -169,8 +211,17 @@ export function App({ me, initialConnection }: AppProps) {
     return () => clearTimeout(timer)
   }, [status])
 
+  const layout = useMemo(() => {
+    const totalWidth = Math.max(40, columns)
+    const listWidth = Math.min(36, Math.max(20, Math.floor(totalWidth * 0.3)))
+    const mainHeight = Math.max(6, rows - 4)
+    return { listWidth, messageWidth: totalWidth - listWidth, mainHeight }
+  }, [columns, rows])
+
   useInput(
     (input, key) => {
+      if (isSearchingContacts) return
+
       const action = resolveKey(input, key, pane)
       if (!action) return
 
@@ -181,7 +232,6 @@ export function App({ me, initialConnection }: AppProps) {
         case 'focus-next': {
           const index = PANE_ORDER.indexOf(pane)
           const next = PANE_ORDER[(index + 1) % PANE_ORDER.length] ?? 'list'
-          // Never park focus on an empty message pane.
           setPane(next === 'messages' && !openChatRef.current ? 'list' : next)
           return
         }
@@ -216,23 +266,70 @@ export function App({ me, initialConnection }: AppProps) {
         case 'load-older':
           void loadOlder()
           return
+        case 'search-contacts':
+          setIsSearchingContacts(true)
+          return
+        case 'sync-device':
+          void (async () => {
+            setStatus('syncing with device...')
+            try {
+              const res = await call<{ ok: boolean; chatCount: number; contactCount: number }>('sync', {})
+              await loadChats()
+              await loadContacts()
+              setStatus(`synced ${res.chatCount} chats, ${res.contactCount} contacts`)
+            } catch (err) {
+              setStatus(`sync error: ${toErrorPayload(err).message}`)
+            }
+          })()
+          return
+        case 'play-media': {
+          const curMsgs = messagesRef.current
+          if (curMsgs.length === 0) return
+          const win = visibleWindow(curMsgs, offset, layout.mainHeight)
+          const audioMsg = [...win.items].reverse().find(
+            (m) =>
+              m.type === 'audioMessage' ||
+              Boolean(m.mediaPath && m.mediaPath.match(/\.(ogg|opus|mp3|m4a|wav)$/i)),
+          )
+          if (audioMsg?.mediaPath) {
+            setStatus(`playing audio: ${audioMsg.mediaPath.split('/').pop()}`)
+            playAudio(audioMsg.mediaPath).catch((err) => {
+              setStatus(`play error: ${(err as Error).message}`)
+            })
+          } else {
+            setStatus('no voice note in view')
+          }
+          return
+        }
+        case 'view-media': {
+          const curMsgs = messagesRef.current
+          if (curMsgs.length === 0) return
+          const win = visibleWindow(curMsgs, offset, layout.mainHeight)
+          const imgMsg = [...win.items].reverse().find(
+            (m) =>
+              m.type === 'imageMessage' ||
+              Boolean(m.mediaPath && m.mediaPath.match(/\.(jpe?g|png|webp|gif)$/i)),
+          )
+          if (imgMsg?.mediaPath) {
+            setStatus(`viewing image: ${imgMsg.mediaPath.split('/').pop()}`)
+            openImageViewer(imgMsg.mediaPath).catch((err) => {
+              setStatus(`viewer error: ${(err as Error).message}`)
+            })
+          } else {
+            setStatus('no image in view')
+          }
+          return
+        }
       }
     },
-    { isActive: pane !== 'composer' },
+    { isActive: pane !== 'composer' && !isSearchingContacts },
   )
 
-  // Keep the selection pointing at the same chat as the list re-sorts.
+  // Keep selection pointing at the same chat as the list re-sorts.
   useEffect(() => {
     if (openChatJid === null) return
     setSelectedIndex(indexOfChat(chats, openChatJid))
   }, [chats, openChatJid])
-
-  const layout = useMemo(() => {
-    const totalWidth = Math.max(40, columns)
-    const listWidth = Math.min(36, Math.max(20, Math.floor(totalWidth * 0.3)))
-    const mainHeight = Math.max(6, rows - 4)
-    return { listWidth, messageWidth: totalWidth - listWidth, mainHeight }
-  }, [columns, rows])
 
   const window = useMemo(
     () => ({ atNewest: offset === 0 }),
@@ -240,34 +337,71 @@ export function App({ me, initialConnection }: AppProps) {
   )
 
   const selectedChat = chats[selectedIndex]
-  const title = selectedChat ? selectedChat.name ?? selectedChat.jid : null
+  const title = selectedChat ? contactMap[selectedChat.jid] ?? selectedChat.name ?? selectedChat.jid : null
 
   return (
     <Box flexDirection="column" width={columns}>
-      <Box flexDirection="row">
-        <ChatList
+      {isSearchingContacts ? (
+        <ContactSearch
+          contacts={contacts}
           chats={chats}
-          selectedIndex={selectedIndex}
-          isFocused={pane === 'list'}
-          width={layout.listWidth}
+          width={columns}
           height={layout.mainHeight}
+          onSelect={(jid, name) => {
+            setIsSearchingContacts(false)
+            if (!chats.some((c) => c.jid === jid)) {
+              setChats((cur) =>
+                applyIncomingChat(
+                  cur,
+                  {
+                    id: `init-${Date.now()}`,
+                    chat: jid,
+                    chatName: name ?? null,
+                    from: jid,
+                    fromName: name ?? null,
+                    fromMe: false,
+                    ts: Math.floor(Date.now() / 1000),
+                    type: 'text',
+                    text: '',
+                  },
+                  jid,
+                ),
+              )
+            }
+            void openChat(jid)
+            setPane('composer')
+          }}
+          onClose={() => setIsSearchingContacts(false)}
         />
-        <MessagePane
-          messages={messages}
-          chatName={title}
-          chatJid={openChatJid}
-          offset={offset}
-          isFocused={pane === 'messages'}
-          width={layout.messageWidth}
-          height={layout.mainHeight}
-          meName={me?.name ?? 'me'}
-        />
-      </Box>
+      ) : (
+        <Box flexDirection="row">
+          <ChatList
+            chats={chats}
+            selectedIndex={selectedIndex}
+            isFocused={pane === 'list'}
+            width={layout.listWidth}
+            height={layout.mainHeight}
+          />
+          <MessagePane
+            messages={messages}
+            chatName={title}
+            chatJid={openChatJid}
+            offset={offset}
+            isFocused={pane === 'messages'}
+            width={layout.messageWidth}
+            height={layout.mainHeight}
+            meName={me?.name ?? 'me'}
+            contactNames={contactMap}
+          />
+        </Box>
+      )}
       <Composer
         isActive={pane === 'composer'}
         width={columns}
         placeholder={
-          openChatJid ? 'press i to write' : 'select a chat and press enter to open'
+          openChatJid
+            ? 'press i to write · @doc/@image/@voice to send media'
+            : 'select a chat and press enter to open'
         }
         onSubmit={(text) => void send(text)}
         onExit={() => setPane('list')}

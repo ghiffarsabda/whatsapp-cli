@@ -140,7 +140,40 @@ export function buildHandlers(deps: MethodDeps): Record<string, MethodHandler> {
       const ref = requireString(params, 'chat')
       const text = requireString(params, 'text')
       const jid = resolveSendTarget(store, ref)
+
+      const trimmed = text.trim()
+      if (
+        trimmed.startsWith('@document ') ||
+        trimmed.startsWith('@image ') ||
+        trimmed.startsWith('@voice ') ||
+        trimmed.startsWith('@audio ')
+      ) {
+        const parts = trimmed.split(' ')
+        const tag = parts[0]!
+        const filePath = parts[1]!
+        const caption = parts.slice(2).join(' ').trim()
+        const type =
+          tag === '@document' ? 'document' : tag === '@image' ? 'image' : tag === '@voice' ? 'voice' : 'audio'
+        return connection.sendMedia(jid, filePath, { type, caption })
+      }
+
       return connection.sendText(jid, text)
+    },
+
+    sendMedia: async (params) => {
+      const ref = requireString(params, 'chat')
+      const filePath = requireString(params, 'path')
+      const jid = resolveSendTarget(store, ref)
+      const caption = typeof params.caption === 'string' ? params.caption : undefined
+      const fileName = typeof params.fileName === 'string' ? params.fileName : undefined
+      const type =
+        params.type === 'image' ||
+        params.type === 'audio' ||
+        params.type === 'voice' ||
+        params.type === 'document'
+          ? params.type
+          : undefined
+      return connection.sendMedia(jid, filePath, { type, caption, fileName })
     },
 
     subscribe: async (params, context: ConnectionContext) => {

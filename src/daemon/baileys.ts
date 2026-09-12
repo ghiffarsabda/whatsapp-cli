@@ -1,7 +1,10 @@
-import { rmSync } from 'node:fs'
+import { createWriteStream, existsSync, readFileSync, rmSync } from 'node:fs'
+import { basename, extname, join } from 'node:path'
+import { pipeline } from 'node:stream/promises'
 import makeWASocket, {
   Browsers,
   DisconnectReason,
+  downloadContentFromMessage,
   fetchLatestBaileysVersion,
   jidNormalizedUser,
   useMultiFileAuthState,
@@ -9,11 +12,11 @@ import makeWASocket, {
 } from '@whiskeysockets/baileys'
 import type { Logger } from 'pino'
 import { ensurePrivateDir } from '../shared/atomic.js'
-import { notLoggedIn, timedOut } from '../shared/errors.js'
+import { notFound, notLoggedIn, timedOut } from '../shared/errors.js'
 import type { DaemonState, MessageRecord, SendResult } from '../shared/protocol.js'
 import { isGroupJid, numberFromJid } from '../shared/jid.js'
 import { defaultState } from '../shared/state-file.js'
-import { recordFromMessage, type IncomingMessage } from './ingest.js'
+import { recordFromMessage, unwrapContent, type IncomingMessage } from './ingest.js'
 import type { Store } from './store.js'
 
 const MAX_BACKOFF_MS = 30_000
@@ -30,6 +33,7 @@ type ChatLike = { id?: string | null; name?: string | null; unreadCount?: number
 
 export interface WaConnectionOptions {
   authDir: string
+  mediaDir?: string
   store: Store
   logger: Logger
   onStateChange: (state: DaemonState) => void
@@ -269,6 +273,14 @@ export class WaConnection {
       })
       if (!record) continue
 
+      if (this.options.mediaDir && message.key?.id) {
+        void this.downloadMedia(message, chat, message.key.id).then((mediaPath) => {
+          if (mediaPath) {
+            record.mediaPath = mediaPath
+          }
+        })
+      }
+
       const stored = this.options.store.append(record)
       if (stored && !historical) this.options.onMessage(record)
     }
@@ -359,6 +371,147 @@ export class WaConnection {
         typeof sent.messageTimestamp === 'number'
           ? sent.messageTimestamp
           : Math.floor(Date.now() / 1000),
+    }
+  }
+
+  async sendMedia(
+    jid: string,
+    filePath: string,
+    options: {
+      type?: 'image' | 'audio' | 'voice' | 'document'
+      caption?: string
+      fileName?: string
+    } = {},
+  ): Promise<SendResult> {
+    await this.waitForOpen()
+    const sock = this.sock
+    if (!sock) throw notLoggedIn()
+
+    if (!existsSync(filePath)) {
+      throw notFound(`Media file not found: ${filePath}`)
+    }
+
+    const buffer = readFileSync(filePath)
+    const fileExt = extname(filePath).toLowerCase()
+    const name = options.fileName ?? basename(filePath)
+
+    let inferredType = options.type
+    if (!inferredType) {
+      if (['.jpg', '.jpeg', '.png', '.webp', '.gif'].includes(fileExt)) {
+        inferredType = 'image'
+      } else if (['.ogg', '.opus', '.mp3', '.m4a', '.wav', '.aac'].includes(fileExt)) {
+        inferredType = 'voice'
+      } else {
+        inferredType = 'document'
+      }
+    }
+
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    let payload: any
+    if (inferredType === 'image') {
+      payload = {
+        image: buffer,
+        caption: options.caption || undefined,
+      }
+    } else if (inferredType === 'voice') {
+      payload = {
+        audio: buffer,
+        mimetype: fileExt === '.mp3' ? 'audio/mpeg' : 'audio/ogg; codecs=opus',
+        ptt: true,
+      }
+    } else if (inferredType === 'audio') {
+      payload = {
+        audio: buffer,
+        mimetype: fileExt === '.mp3' ? 'audio/mpeg' : 'audio/ogg; codecs=opus',
+        ptt: false,
+      }
+    } else {
+      const mime =
+        fileExt === '.pdf'
+          ? 'application/pdf'
+          : fileExt === '.zip'
+            ? 'application/zip'
+            : fileExt === '.txt'
+              ? 'text/plain'
+              : 'application/octet-stream'
+      payload = {
+        document: buffer,
+        mimetype: mime,
+        fileName: name,
+        caption: options.caption || undefined,
+      }
+    }
+
+    const sent = await sock.sendMessage(jid, payload)
+    const messageId = sent?.key?.id
+    if (!sent || !messageId) throw new Error('send failed: no message id returned')
+
+    const record = recordFromMessage(sent as unknown as IncomingMessage, {
+      chatName: this.options.store.contactName(jid),
+      meJid: this.state.me?.jid ?? null,
+      meName: this.state.me?.name ?? null,
+      mediaPath: filePath,
+    })
+    if (record) {
+      this.options.store.append(record)
+      this.options.onMessage(record)
+    }
+
+    return {
+      messageId,
+      chat: jid,
+      timestamp:
+        typeof sent.messageTimestamp === 'number'
+          ? sent.messageTimestamp
+          : Math.floor(Date.now() / 1000),
+    }
+  }
+
+  async downloadMedia(
+    msg: IncomingMessage,
+    chat: string,
+    messageId: string,
+  ): Promise<string | null> {
+    if (!this.options.mediaDir) return null
+    const unwrapped = unwrapContent(msg.message)
+    if (!unwrapped) return null
+
+    let type: 'image' | 'audio' | 'document' | null = null
+    let ext = ''
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    let mediaObj: any = null
+
+    if (unwrapped.imageMessage) {
+      type = 'image'
+      ext = '.jpeg'
+      mediaObj = unwrapped.imageMessage
+    } else if (unwrapped.audioMessage) {
+      type = 'audio'
+      ext = unwrapped.audioMessage.ptt ? '.ogg' : '.m4a'
+      mediaObj = unwrapped.audioMessage
+    } else if (unwrapped.documentMessage) {
+      type = 'document'
+      mediaObj = unwrapped.documentMessage
+      const originalExt = mediaObj.fileName ? extname(mediaObj.fileName) : ''
+      ext = originalExt || '.bin'
+    }
+
+    if (!type || !mediaObj || !mediaObj.mediaKey) return null
+
+    try {
+      const safeChat = chat.replace(/[^a-zA-Z0-9_-]/g, '_')
+      const chatDir = join(this.options.mediaDir, safeChat)
+      ensurePrivateDir(chatDir)
+      const filePath = join(chatDir, `${messageId}${ext}`)
+      if (existsSync(filePath)) return filePath
+
+      const stream = await downloadContentFromMessage(mediaObj, type)
+      const out = createWriteStream(filePath)
+      await pipeline(stream, out)
+      return filePath
+    } catch (error) {
+      this.options.logger.warn({ error, messageId }, 'failed to download media')
+      return null
     }
   }
 

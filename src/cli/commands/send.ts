@@ -9,6 +9,11 @@ import type { CommandContext } from './context.js'
 
 export interface SendFlags {
   bodyFile?: string
+  document?: string
+  image?: string
+  voice?: string
+  audio?: string
+  caption?: string
 }
 
 async function readStdin(): Promise<string> {
@@ -21,7 +26,7 @@ async function readStdin(): Promise<string> {
  * Body comes from the argument, from `-` (stdin), or from `--body-file`, so
  * agents never have to fight shell escaping for long or multi-line text.
  */
-async function resolveBody(text: string, flags: SendFlags): Promise<string> {
+async function resolveBody(text: string | undefined, flags: SendFlags): Promise<string> {
   if (flags.bodyFile) {
     try {
       return readFileSync(flags.bodyFile, 'utf8')
@@ -30,20 +35,64 @@ async function resolveBody(text: string, flags: SendFlags): Promise<string> {
     }
   }
   if (text === '-') return readStdin()
-  return text
+  return text ?? ''
 }
 
 export async function sendCommand(
   chat: string,
-  text: string,
+  text: string | undefined,
   flags: SendFlags,
   options: OutputOptions,
   context: CommandContext,
 ): Promise<void> {
+  await ensureDaemon({ dataDir: context.dataDir })
+
+  if (flags.document) {
+    const caption = flags.caption ?? (text && text !== '-' ? text : undefined)
+    const result = await call<SendResult>('sendMedia', {
+      chat,
+      path: flags.document,
+      type: 'document',
+      caption,
+    })
+    emitOk(result, options, renderSendResult)
+    return
+  }
+
+  if (flags.image) {
+    const caption = flags.caption ?? (text && text !== '-' ? text : undefined)
+    const result = await call<SendResult>('sendMedia', {
+      chat,
+      path: flags.image,
+      type: 'image',
+      caption,
+    })
+    emitOk(result, options, renderSendResult)
+    return
+  }
+
+  if (flags.voice) {
+    const result = await call<SendResult>('sendMedia', {
+      chat,
+      path: flags.voice,
+      type: 'voice',
+    })
+    emitOk(result, options, renderSendResult)
+    return
+  }
+
+  if (flags.audio) {
+    const result = await call<SendResult>('sendMedia', {
+      chat,
+      path: flags.audio,
+      type: 'audio',
+    })
+    emitOk(result, options, renderSendResult)
+    return
+  }
+
   const body = (await resolveBody(text, flags)).replace(/\s+$/, '')
   if (body.trim() === '') throw usage('Refusing to send an empty message')
-
-  await ensureDaemon({ dataDir: context.dataDir })
 
   const result = await call<SendResult>('send', { chat, text: body })
   emitOk(result, options, renderSendResult)

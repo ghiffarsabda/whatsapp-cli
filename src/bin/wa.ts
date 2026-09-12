@@ -3,9 +3,12 @@ import { Command, CommanderError } from 'commander'
 import { setDataDirOverride } from '../shared/paths.js'
 import { VERSION } from '../shared/version.js'
 import { chatsCommand } from '../cli/commands/chats.js'
+import { contactsCommand } from '../cli/commands/contacts.js'
+import { syncCommand } from '../cli/commands/sync.js'
 import { daemonCommand, type DaemonAction } from '../cli/commands/daemon.js'
 import { loginCommand } from '../cli/commands/login.js'
 import { logoutCommand } from '../cli/commands/logout.js'
+import { playCommand } from '../cli/commands/play.js'
 import { readCommand } from '../cli/commands/read.js'
 import { schemaCommand } from '../cli/commands/schema.js'
 import { searchCommand } from '../cli/commands/search.js'
@@ -144,6 +147,25 @@ addSharedFlags(program.command('chats').description('list chats by recent activi
     )
   })
 
+addSharedFlags(program.command('contacts').description('list contacts and search phone numbers'))
+  .option('--limit <n>', 'maximum contacts to return')
+  .option('--search <text>', 'filter by name, phone, or JID substring')
+  .action((options, command: Command) => {
+    const opts = command.opts()
+    return run(command, () =>
+      contactsCommand(
+        { limit: toNumber(opts.limit), search: opts.search },
+        outputFor(command),
+        { dataDir: dataDirFor(command) },
+      ),
+    )
+  })
+
+addSharedFlags(program.command('sync').description('sync groups and contacts with WhatsApp device'))
+  .action((options, command: Command) =>
+    run(command, () => syncCommand(outputFor(command), { dataDir: dataDirFor(command) })),
+  )
+
 addSharedFlags(program.command('read').description('read stored messages from a chat'))
   .argument('<chat>', 'JID, phone number, or chat name')
   .option('--limit <n>', 'maximum messages')
@@ -161,22 +183,43 @@ addSharedFlags(program.command('read').description('read stored messages from a 
     )
   })
 
-addSharedFlags(program.command('send').description('send a text message'))
+addSharedFlags(program.command('send').description('send a text message, image, voice note, or document'))
   .argument('<chat>', 'JID, phone number, or chat name')
   .argument('[text]', 'message body, or "-" to read from stdin')
   .option('--body-file <path>', 'read the body from a file')
+  .option('--document <path>', 'send a document file')
+  .option('--image <path>', 'send an image file')
+  .option('--voice <path>', 'send an audio file as a voice note')
+  .option('--audio <path>', 'send an audio file')
+  .option('--caption <text>', 'optional caption for media')
   .action((chat: string, text: string | undefined, options, command: Command) => {
     const opts = command.opts()
     return run(command, () =>
       sendCommand(
         chat,
-        text ?? '-',
-        { bodyFile: opts.bodyFile },
+        text,
+        {
+          bodyFile: opts.bodyFile,
+          document: opts.document,
+          image: opts.image,
+          voice: opts.voice,
+          audio: opts.audio,
+          caption: opts.caption,
+        },
         outputFor(command),
         { dataDir: dataDirFor(command) },
       ),
     )
   })
+
+addSharedFlags(program.command('play').description('play a voice note or audio message'))
+  .argument('<chat>', 'JID, phone number, or chat name')
+  .argument('[message-id]', 'optional message ID; defaults to newest voice note')
+  .action((chat: string, messageId: string | undefined, options, command: Command) =>
+    run(command, () =>
+      playCommand(chat, messageId, outputFor(command), { dataDir: dataDirFor(command) }),
+    ),
+  )
 
 addSharedFlags(program.command('watch').description('stream incoming messages'))
   .argument('[chat]', 'limit to one chat')
