@@ -206,3 +206,53 @@ test('marks group chats as groups', async () => {
   store.append(record({ id: 'g', chat: '120363@g.us', chatName: 'Team' }))
   assert.equal(store.listChats()[0]!.isGroup, true)
 })
+
+test('setGroupName tracks group subject and registers chat', async () => {
+  const { store } = makeStore()
+  store.setGroupName('120363@g.us', 'Engineers Lounge')
+  const chats = store.listChats()
+  assert.equal(chats.length, 1)
+  assert.equal(chats[0]!.jid, '120363@g.us')
+  assert.equal(chats[0]!.name, 'Engineers Lounge')
+  assert.equal(chats[0]!.isGroup, true)
+  assert.equal(store.contactName('120363@g.us'), 'Engineers Lounge')
+})
+
+test('setContact prioritizes full name over notify pushName', async () => {
+  const { store } = makeStore()
+  // First notify arrives
+  store.setContact('628555@s.whatsapp.net', { notify: 'Budi' })
+  assert.equal(store.contactName('628555@s.whatsapp.net'), 'Budi')
+
+  // Address book full name arrives later
+  store.setContact('628555@s.whatsapp.net', { fullName: 'Budi Santoso' })
+  assert.equal(store.contactName('628555@s.whatsapp.net'), 'Budi Santoso')
+
+  // Another pushName arrives later; full name must still win
+  store.setContact('628555@s.whatsapp.net', { notify: 'Bud' })
+  assert.equal(store.contactName('628555@s.whatsapp.net'), 'Budi Santoso')
+})
+
+test('touchChat registers a chat even before messages arrive', async () => {
+  const { store } = makeStore()
+  store.touchChat('628999@s.whatsapp.net', { name: 'Alice', unread: 3 })
+  const chats = store.listChats()
+  assert.equal(chats.length, 1)
+  assert.equal(chats[0]!.name, 'Alice')
+  assert.equal(chats[0]!.unread, 3)
+})
+
+test('listContacts filters by name and phone', async () => {
+  const { store } = makeStore()
+  store.setContact('62812345@s.whatsapp.net', { fullName: 'Charlie Brown' })
+  store.setContact('62899999@s.whatsapp.net', { notify: 'Dave' })
+
+  const all = store.listContacts()
+  assert.equal(all.length, 2)
+  const charlie = store.listContacts({ search: 'charlie' })
+  assert.equal(charlie.length, 1)
+  assert.equal(charlie[0]!.name, 'Charlie Brown')
+  const byPhone = store.listContacts({ search: '899999' })
+  assert.equal(byPhone.length, 1)
+  assert.equal(byPhone[0]!.notify, 'Dave')
+})

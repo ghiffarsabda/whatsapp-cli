@@ -2,8 +2,8 @@ import { appendFileSync, createReadStream, existsSync, readFileSync } from 'node
 import { dirname } from 'node:path'
 import { createInterface } from 'node:readline'
 import { ensureParentDir, ensurePrivateDir, writeFileAtomic } from '../shared/atomic.js'
-import type { ChatSummary, MessageRecord } from '../shared/protocol.js'
-import { isGroupJid, type ChatCandidate } from '../shared/jid.js'
+import type { ChatSummary, ContactSummary, MessageRecord } from '../shared/protocol.js'
+import { isGroupJid, numberFromJid, type ChatCandidate } from '../shared/jid.js'
 import { displayNameFor } from './ingest.js'
 
 export interface ReadQuery {
@@ -20,11 +20,15 @@ export interface ChatQuery {
   unreadOnly?: boolean
 }
 
+export interface ContactDetails extends ContactSummary {}
+
 interface ChatSnapshot {
   version: number
   updatedAt: string
   unread: Record<string, number>
   names: Record<string, string>
+  chats?: ChatSummary[]
+  contacts?: ContactDetails[]
 }
 
 const SNAPSHOT_DELAY_MS = 250
@@ -36,6 +40,7 @@ const DEDUPE_WINDOW = 5000
  */
 export class Store {
   private readonly chats = new Map<string, ChatSummary>()
+  private readonly contacts = new Map<string, ContactDetails>()
   private readonly contactNames = new Map<string, string>()
   private readonly recentIds = new Set<string>()
   private recentIdOrder: string[] = []
@@ -51,6 +56,12 @@ export class Store {
     const snapshot = this.readSnapshot()
     for (const [jid, name] of Object.entries(snapshot?.names ?? {})) {
       this.contactNames.set(jid, name)
+    }
+    for (const c of snapshot?.contacts ?? []) {
+      this.contacts.set(c.jid, c)
+    }
+    for (const c of snapshot?.chats ?? []) {
+      this.chats.set(c.jid, { ...c })
     }
     const unread = snapshot?.unread ?? {}
 
@@ -151,16 +162,120 @@ export class Store {
     }
   }
 
+  setContact(jid: string, data: { fullName?: string | null; notify?: string | null }): void {
+    const existing = this.contacts.get(jid)
+    const fullName = data.fullName && data.fullName.trim() !== '' ? data.fullName.trim() : existing?.name ?? null
+    const notify = data.notify && data.notify.trim() !== '' ? data.notify.trim() : existing?.notify ?? null
+    const isGroup = isGroupJid(jid)
+    const phone = isGroup ? null : numberFromJid(jid)
+
+    const updated: ContactDetails = {
+      jid,
+      name: fullName,
+      notify,
+      phone,
+      isGroup,
+    }
+    this.contacts.set(jid, updated)
+
+    // Full name always takes priority over push name / notify
+    const bestName = fullName ?? notify
+    if (bestName) {
+      this.contactNames.set(jid, bestName)
+      const chat = this.chats.get(jid)
+      if (chat) {
+        if (fullName || !chat.name) chat.name = bestName
+      }
+    }
+    this.scheduleSnapshot()
+  }
+
+  setGroupName(jid: string, subject: string): void {
+    const clean = subject.trim()
+    if (!clean) return
+    this.contactNames.set(jid, clean)
+    this.contacts.set(jid, {
+      jid,
+      name: clean,
+      notify: null,
+      phone: null,
+      isGroup: true,
+    })
+    const chat = this.chats.get(jid)
+    if (chat) {
+      chat.name = clean
+      chat.isGroup = true
+    } else {
+      this.chats.set(jid, {
+        jid,
+        name: clean,
+        isGroup: true,
+        lastTs: 0,
+        lastText: '[group]',
+        unread: 0,
+      })
+    }
+    this.scheduleSnapshot()
+  }
+
+  touchChat(
+    jid: string,
+    options: { name?: string | null; unread?: number; lastTs?: number; lastText?: string } = {},
+  ): void {
+    const existing = this.chats.get(jid)
+    const isGroup = isGroupJid(jid)
+    const name = options.name ?? this.contactNames.get(jid) ?? existing?.name ?? null
+    if (!existing) {
+      this.chats.set(jid, {
+        jid,
+        name,
+        isGroup,
+        lastTs: options.lastTs ?? 0,
+        lastText: options.lastText ?? (isGroup ? '[group]' : ''),
+        unread: options.unread ?? 0,
+      })
+    } else {
+      if (options.name && (!existing.name || existing.name === existing.jid)) {
+        existing.name = options.name
+      }
+      if (typeof options.unread === 'number' && options.unread > 0) {
+        existing.unread = options.unread
+      }
+      if (options.lastTs && options.lastTs > existing.lastTs) {
+        existing.lastTs = options.lastTs
+        if (options.lastText) existing.lastText = options.lastText
+      }
+    }
+    this.scheduleSnapshot()
+  }
+
   setContactName(jid: string, name: string): void {
     if (!name.trim()) return
-    this.contactNames.set(jid, name)
-    const chat = this.chats.get(jid)
-    if (chat && !chat.name) chat.name = name
-    this.scheduleSnapshot()
+    this.setContact(jid, { fullName: name })
   }
 
   contactName(jid: string): string | null {
     return this.contactNames.get(jid) ?? this.chats.get(jid)?.name ?? null
+  }
+
+  contact(jid: string): ContactDetails | undefined {
+    return this.contacts.get(jid)
+  }
+
+  listContacts(query: { search?: string; limit?: number } = {}): ContactDetails[] {
+    let list = [...this.contacts.values()]
+    if (query.search) {
+      const q = query.search.toLowerCase()
+      list = list.filter(
+        (c) =>
+          c.jid.toLowerCase().includes(q) ||
+          (c.name && c.name.toLowerCase().includes(q)) ||
+          (c.notify && c.notify.toLowerCase().includes(q)) ||
+          (c.phone && c.phone.includes(q)),
+      )
+    }
+    list.sort((a, b) => (a.name ?? a.notify ?? a.jid).localeCompare(b.name ?? b.notify ?? b.jid))
+    return query.limit && query.limit > 0 ? list.slice(0, query.limit) : list
   }
 
   chat(jid: string): ChatSummary | undefined {
@@ -183,11 +298,24 @@ export class Store {
   }
 
   candidates(): ChatCandidate[] {
-    return [...this.chats.values()].map((chat) => ({
-      jid: chat.jid,
-      name: displayNameFor(chat.jid, chat.name),
-      isGroup: chat.isGroup,
-    }))
+    const map = new Map<string, ChatCandidate>()
+    for (const chat of this.chats.values()) {
+      map.set(chat.jid, {
+        jid: chat.jid,
+        name: displayNameFor(chat.jid, chat.name),
+        isGroup: chat.isGroup,
+      })
+    }
+    for (const contact of this.contacts.values()) {
+      if (!map.has(contact.jid)) {
+        map.set(contact.jid, {
+          jid: contact.jid,
+          name: displayNameFor(contact.jid, contact.name ?? contact.notify),
+          isGroup: contact.isGroup,
+        })
+      }
+    }
+    return [...map.values()]
   }
 
   /** Read messages from the log, newest last. Scans the whole file. */
@@ -246,12 +374,14 @@ export class Store {
       this.snapshotTimer = null
     }
     const snapshot: ChatSnapshot = {
-      version: 1,
+      version: 2,
       updatedAt: new Date().toISOString(),
       unread: Object.fromEntries(
         [...this.chats.values()].filter((chat) => chat.unread > 0).map((chat) => [chat.jid, chat.unread]),
       ),
       names: Object.fromEntries(this.contactNames),
+      chats: [...this.chats.values()],
+      contacts: [...this.contacts.values()],
     }
     try {
       ensurePrivateDir(dirname(this.snapshotFile))

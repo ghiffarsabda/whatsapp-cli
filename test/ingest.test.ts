@@ -69,10 +69,25 @@ test('recordFromMessage maps a direct message', () => {
   assert.equal(record?.chat, '628111@s.whatsapp.net')
   assert.equal(record?.from, '628111@s.whatsapp.net')
   assert.equal(record?.fromName, 'Budi')
+  assert.equal(record?.chatName, 'Budi')
   assert.equal(record?.fromMe, false)
   assert.equal(record?.type, 'text')
   assert.equal(record?.text, 'hi there')
   assert.equal(record?.ts, 1700000000)
+})
+
+test('recordFromMessage handles voice notes and duration', () => {
+  const message: IncomingMessage = {
+    key: { id: 'V1', remoteJid: '628111@s.whatsapp.net', fromMe: false },
+    message: { audioMessage: { seconds: 75, ptt: true, mimetype: 'audio/ogg; codecs=opus' } },
+    messageTimestamp: 1700000020,
+    pushName: 'Budi',
+  }
+  const record = recordFromMessage(message)
+  assert.equal(record?.type, 'audioMessage')
+  assert.equal(record?.text, '[voice note 1:15]')
+  assert.equal(record?.duration, 75)
+  assert.equal(record?.mimetype, 'audio/ogg; codecs=opus')
 })
 
 test('recordFromMessage attributes group messages to the participant', () => {

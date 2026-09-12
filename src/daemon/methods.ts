@@ -91,6 +91,23 @@ export function buildHandlers(deps: MethodDeps): Record<string, MethodHandler> {
       return { chats }
     },
 
+    contacts: async (params) => {
+      const contacts = store.listContacts({
+        limit: optionalNumber(params, 'limit'),
+        search: typeof params.search === 'string' ? params.search : undefined,
+      })
+      return { contacts }
+    },
+
+    sync: async () => {
+      await connection.syncGroups()
+      return {
+        ok: true,
+        chatCount: store.listChats().length,
+        contactCount: store.listContacts().length,
+      }
+    },
+
     read: async (params) => {
       const ref = requireString(params, 'chat')
       const jid = resolveExistingChat(store, ref)

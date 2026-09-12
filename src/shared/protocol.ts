@@ -15,6 +15,10 @@ export interface MessageRecord {
   type: string
   text: string
   replyTo?: string | null
+  mediaPath?: string | null
+  mimetype?: string | null
+  fileName?: string | null
+  duration?: number | null
 }
 
 export interface ChatSummary {
@@ -24,6 +28,14 @@ export interface ChatSummary {
   lastTs: number
   lastText: string
   unread: number
+}
+
+export interface ContactSummary {
+  jid: string
+  name: string | null
+  notify: string | null
+  phone: string | null
+  isGroup: boolean
 }
 
 export interface MeInfo {
@@ -62,9 +74,12 @@ export interface LoginResult {
 export type Method =
   | 'status'
   | 'chats'
+  | 'contacts'
   | 'read'
   | 'search'
   | 'send'
+  | 'sendMedia'
+  | 'sync'
   | 'subscribe'
   | 'ensureLogin'
   | 'logout'

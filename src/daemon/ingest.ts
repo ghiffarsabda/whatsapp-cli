@@ -121,6 +121,7 @@ export interface RecordOptions {
   chatName?: string | null
   meJid?: string | null
   meName?: string | null
+  mediaPath?: string | null
 }
 
 export function recordFromMessage(
@@ -135,19 +136,43 @@ export function recordFromMessage(
   const from = fromMe ? options.meJid ?? chat : isGroupJid(chat) ? participant ?? chat : chat
 
   const contextInfo = contextInfoOf(msg.message)
+  const unwrapped = unwrapContent(msg.message)
   const text = textFromContent(msg.message)
+
+  const isGroup = isGroupJid(chat)
+  const effectiveChatName = options.chatName ?? (!isGroup && !fromMe ? msg.pushName ?? null : null)
+
+  const audio = unwrapped?.audioMessage
+  const image = unwrapped?.imageMessage
+  const document = unwrapped?.documentMessage
+  const duration = typeof audio?.seconds === 'number' ? audio.seconds : null
+  const mimetype = audio?.mimetype ?? image?.mimetype ?? document?.mimetype ?? null
+  const fileName = document?.fileName ?? null
+
+  let fallbackPlaceholder = placeholderFor(msg.message)
+  if (audio) {
+    const isPtt = Boolean(audio.ptt)
+    const durStr = duration !== null ? ` ${Math.floor(duration / 60)}:${String(duration % 60).padStart(2, '0')}` : ''
+    fallbackPlaceholder = isPtt ? `[voice note${durStr}]` : `[audio${durStr}]`
+  } else if (document && fileName) {
+    fallbackPlaceholder = `[document: ${fileName}]`
+  }
 
   return {
     id: msg.key!.id as string,
     chat,
-    chatName: options.chatName ?? null,
+    chatName: effectiveChatName,
     from,
     fromName: fromMe ? options.meName ?? null : msg.pushName ?? null,
     fromMe,
     ts: toEpochSeconds(msg.messageTimestamp),
     type: text === null ? contentTypeOf(msg.message) : 'text',
-    text: text ?? placeholderFor(msg.message),
+    text: text ?? fallbackPlaceholder,
     replyTo: typeof contextInfo?.stanzaId === 'string' ? contextInfo.stanzaId : null,
+    mediaPath: options.mediaPath ?? null,
+    mimetype,
+    fileName,
+    duration,
   }
 }
 

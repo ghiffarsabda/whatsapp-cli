@@ -11,7 +11,7 @@ import type { Logger } from 'pino'
 import { ensurePrivateDir } from '../shared/atomic.js'
 import { notLoggedIn, timedOut } from '../shared/errors.js'
 import type { DaemonState, MessageRecord, SendResult } from '../shared/protocol.js'
-import { numberFromJid } from '../shared/jid.js'
+import { isGroupJid, numberFromJid } from '../shared/jid.js'
 import { defaultState } from '../shared/state-file.js'
 import { recordFromMessage, type IncomingMessage } from './ingest.js'
 import type { Store } from './store.js'
@@ -120,6 +120,8 @@ export class WaConnection {
     sock.ev.on('contacts.update', (contacts) => this.ingestContacts(contacts as ContactLike[]))
     sock.ev.on('chats.upsert', (chats) => this.ingestChats(chats as ChatLike[]))
     sock.ev.on('chats.update', (chats) => this.ingestChats(chats as ChatLike[]))
+    sock.ev.on('groups.upsert', (groups) => this.ingestGroups(groups))
+    sock.ev.on('groups.update', (groups) => this.ingestGroups(groups))
 
     this.mutate({
       connection: 'connecting',
@@ -158,6 +160,7 @@ export class WaConnection {
         reconnect: { attempts: 0, nextAt: null },
       })
       this.options.logger.info({ jid }, 'connection open')
+      void this.syncGroups()
       return
     }
 
@@ -210,6 +213,30 @@ export class WaConnection {
     }, delay)
   }
 
+  async syncGroups(): Promise<void> {
+    const sock = this.sock
+    if (!sock) return
+    try {
+      const groups = await sock.groupFetchAllParticipating()
+      for (const [id, metadata] of Object.entries(groups)) {
+        if (metadata?.subject) {
+          this.options.store.setGroupName(id, metadata.subject)
+        }
+      }
+      this.options.logger.info({ groupCount: Object.keys(groups).length }, 'synced participating groups')
+    } catch (error) {
+      this.options.logger.warn({ error }, 'group sync error')
+    }
+  }
+
+  private ingestGroups(groups: Array<{ id?: string | null; subject?: string | null }>): void {
+    for (const group of groups ?? []) {
+      if (group?.id && group?.subject) {
+        this.options.store.setGroupName(group.id, group.subject)
+      }
+    }
+  }
+
   private ingest(messages: IncomingMessage[], historical: boolean): void {
     const meJid = this.state.me?.jid ?? null
     const meName = this.state.me?.name ?? null
@@ -217,6 +244,23 @@ export class WaConnection {
     for (const message of messages) {
       const chat = message.key?.remoteJid ?? null
       if (!chat) continue
+
+      const isGroup = isGroupJid(chat)
+
+      // Learn contact names before reply!
+      if (!isGroup && message.pushName) {
+        const userJid = jidNormalizedUser(chat)
+        if (!this.options.store.contactName(userJid)) {
+          this.options.store.setContact(userJid, { notify: message.pushName })
+        }
+      }
+      const participant = message.key?.participant
+      if (isGroup && participant && message.pushName) {
+        const partJid = jidNormalizedUser(participant)
+        if (!this.options.store.contactName(partJid)) {
+          this.options.store.setContact(partJid, { notify: message.pushName })
+        }
+      }
 
       const record = recordFromMessage(message, {
         chatName: this.options.store.contactName(chat),
@@ -234,15 +278,28 @@ export class WaConnection {
     for (const contact of contacts ?? []) {
       if (!contact?.id) continue
       const jid = jidNormalizedUser(contact.id)
-      const name = contact.name ?? contact.verifiedName ?? contact.notify ?? null
-      if (name) this.options.store.setContactName(jid, name)
+      const fullName = contact.name ?? contact.verifiedName ?? null
+      const notify = contact.notify ?? null
+      this.options.store.setContact(jid, { fullName, notify })
     }
   }
 
   private ingestChats(chats: ChatLike[]): void {
     for (const chat of chats ?? []) {
-      if (!chat?.id || !chat.name) continue
-      this.options.store.setContactName(jidNormalizedUser(chat.id), chat.name)
+      if (!chat?.id) continue
+      const jid = chat.id.includes('@') ? chat.id : `${chat.id}@s.whatsapp.net`
+      const normalized = isGroupJid(jid) ? jid : jidNormalizedUser(jid)
+      if (chat.name) {
+        if (isGroupJid(normalized)) {
+          this.options.store.setGroupName(normalized, chat.name)
+        } else {
+          this.options.store.setContactName(normalized, chat.name)
+        }
+      }
+      this.options.store.touchChat(normalized, {
+        name: chat.name ?? undefined,
+        unread: typeof chat.unreadCount === 'number' ? chat.unreadCount : undefined,
+      })
     }
   }
 
