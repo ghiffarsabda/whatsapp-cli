@@ -1,6 +1,6 @@
 import { Box, Text } from 'ink'
 import type { MessageRecord } from '../../shared/protocol.js'
-import { displayName, shortTime, visibleWindow } from '../logic.js'
+import { displayName, fitMessages, shortTime, visibleWindow } from '../logic.js'
 
 export interface MessagePaneProps {
   messages: MessageRecord[]
@@ -29,6 +29,9 @@ export function MessagePane({
     ? contactNames?.[chatJid] ?? displayName(chatJid, chatName)
     : 'no chat selected'
   const window = visibleWindow(messages, offset, height)
+  // Keep only messages that fit the visible rows so a long message cannot push
+  // the pane into a broken, overflowing layout.
+  const fitted = fitMessages(window.items, Math.max(1, height - 3), width)
 
   return (
     <Box
@@ -47,7 +50,7 @@ export function MessagePane({
         {window.items.length === 0 ? (
           <Text dimColor>{chatJid ? 'no messages' : fullChatName}</Text>
         ) : (
-          window.items.map((message) => {
+          fitted.map((message) => {
             const who = message.fromMe
               ? meName ?? 'me'
               : contactNames?.[message.from] ?? displayName(message.from, message.fromName)
@@ -60,9 +63,7 @@ export function MessagePane({
               Boolean(message.mediaPath && message.mediaPath.match(/\.(ogg|opus|mp3|m4a|wav)$/i))
             const isDoc =
               message.type === 'documentMessage' ||
-              Boolean(
-                message.mediaPath && !isImage && !isAudio && !message.mediaPath.endsWith('.txt'),
-              )
+              Boolean(message.mediaPath && !isImage && !isAudio)
 
             const fileUri = message.mediaPath
               ? message.mediaPath.startsWith('file://')
@@ -108,6 +109,7 @@ export function MessagePane({
                     <Text underline color="cyan">
                       {fileUri}
                     </Text>
+                    {message.fileName ? ` ${message.fileName}` : ''} (press 'v')
                   </Text>
                 ) : null}
               </Box>

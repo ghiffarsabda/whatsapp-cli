@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, before, test } from 'node:test'
@@ -38,6 +38,7 @@ let syncGroupsCalled = 0
 
 const mockConnection = {
   getState: () => ({ connection: 'open', loggedIn: true }),
+  waitForOpen: async () => {},
   syncGroups: async () => {
     syncGroupsCalled++
   },
@@ -89,6 +90,13 @@ before(async () => {
     connection: mockConnection,
     requestShutdown: () => {},
     subscriberCount: () => 0,
+    resolveMedia: (chat, messageId) => {
+      const safe = chat.replace(/[^a-zA-Z0-9_-]/g, '_')
+      const dir = join(mediaDir, safe)
+      if (!existsSync(dir)) return null
+      const match = readdirSync(dir).find((name) => name.startsWith(`${messageId}.`))
+      return match ? join(dir, match) : null
+    },
   })
 
   server = new IpcServer(socketPath, handlers)
@@ -217,4 +225,35 @@ test('IPC send intercepts @image syntax', async () => {
   assert.equal(last.type, 'image')
   assert.equal(last.filePath, testFile)
   assert.equal(last.caption, 'Photo Caption')
+})
+
+test('IPC read backfills a mediaPath for an already-downloaded file', async () => {
+  const jid = '628777000000@s.whatsapp.net'
+  store.setContact(jid, { fullName: 'Doc Sender' })
+  store.append({
+    id: 'DOCMSG',
+    chat: jid,
+    chatName: 'Doc Sender',
+    from: jid,
+    fromName: 'Doc Sender',
+    fromMe: false,
+    ts: 1700000100,
+    type: 'documentMessage',
+    text: '[document: old.pdf]',
+    replyTo: null,
+    mediaPath: null,
+  })
+
+  const safe = jid.replace(/[^a-zA-Z0-9_-]/g, '_')
+  mkdirSync(join(mediaDir, safe), { recursive: true })
+  const filePath = join(mediaDir, safe, 'DOCMSG.pdf')
+  writeFileSync(filePath, 'pdf bytes')
+
+  const res = await call<{ messages: MessageRecord[] }>(
+    'read',
+    { chat: jid, limit: 10 },
+    { socketPath },
+  )
+  assert.equal(res.messages.length, 1)
+  assert.equal(res.messages[0]!.mediaPath, filePath)
 })

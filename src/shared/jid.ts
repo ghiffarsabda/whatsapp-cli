@@ -23,6 +23,16 @@ export function isUserJid(jid: string): boolean {
   return jid.endsWith(`@${USER_SERVER}`) || jid.endsWith(`@${LID_SERVER}`)
 }
 
+/** A phone-number JID, e.g. `628123@s.whatsapp.net` (as opposed to a LID). */
+export function isPnJid(jid: string): boolean {
+  return jid.endsWith(`@${USER_SERVER}`)
+}
+
+/** An anonymous linked-ID JID, e.g. `123456@lid`. */
+export function isLidJid(jid: string): boolean {
+  return jid.endsWith(`@${LID_SERVER}`)
+}
+
 export function isBroadcastJid(jid: string): boolean {
   return jid === STATUS_BROADCAST || jid.endsWith('@broadcast')
 }

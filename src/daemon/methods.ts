@@ -1,6 +1,6 @@
 import { ambiguity, notFound, usage } from '../shared/errors.js'
 import { resolveChatRef } from '../shared/jid.js'
-import type { LoginResult } from '../shared/protocol.js'
+import { PROTOCOL_VERSION, type LoginResult, type MessageRecord } from '../shared/protocol.js'
 import type { ConnectionContext, MethodHandler } from './ipc-server.js'
 import type { WaConnection } from './baileys.js'
 import type { Store } from './store.js'
@@ -10,6 +10,8 @@ export interface MethodDeps {
   connection: WaConnection
   requestShutdown: () => void
   subscriberCount: () => number
+  /** Resolve media downloaded before the record started carrying mediaPath. */
+  resolveMedia?: (chat: string, messageId: string) => string | null
 }
 
 function defaultCountry(): string | undefined {
@@ -69,6 +71,20 @@ function optionalNumber(params: Record<string, unknown>, key: string): number | 
   return Number.isFinite(parsed) ? parsed : undefined
 }
 
+const MEDIA_TYPES = new Set([
+  'imageMessage',
+  'audioMessage',
+  'videoMessage',
+  'documentMessage',
+  'stickerMessage',
+])
+
+/** Only messages that could name a downloaded file are worth a disk lookup. */
+function couldHaveMedia(message: MessageRecord): boolean {
+  if (MEDIA_TYPES.has(message.type)) return true
+  return /^\[(image|audio|voice|video|document|sticker)/.test(message.text ?? '')
+}
+
 export function buildHandlers(deps: MethodDeps): Record<string, MethodHandler> {
   const { store, connection } = deps
 
@@ -77,7 +93,9 @@ export function buildHandlers(deps: MethodDeps): Record<string, MethodHandler> {
       const state = connection.getState()
       return {
         ...state,
+        version: PROTOCOL_VERSION,
         chatCount: store.listChats().length,
+        contactCount: store.listContacts().length,
         subscribers: deps.subscriberCount(),
       }
     },
@@ -100,6 +118,8 @@ export function buildHandlers(deps: MethodDeps): Record<string, MethodHandler> {
     },
 
     sync: async () => {
+      // syncGroups queries WhatsApp, so the socket must actually be open.
+      await connection.waitForOpen()
       await connection.syncGroups()
       return {
         ok: true,
@@ -117,10 +137,18 @@ export function buildHandlers(deps: MethodDeps): Record<string, MethodHandler> {
         since: optionalNumber(params, 'since'),
         before: optionalNumber(params, 'before'),
       })
+      const resolveMedia = deps.resolveMedia
+      const withMedia = resolveMedia
+        ? messages.map((message) =>
+            message.mediaPath || !couldHaveMedia(message)
+              ? message
+              : { ...message, mediaPath: resolveMedia(message.chat, message.id) },
+          )
+        : messages
       store.markRead(jid)
       return {
         chat: { jid, name: store.contactName(jid) },
-        messages,
+        messages: withMedia,
       }
     },
 

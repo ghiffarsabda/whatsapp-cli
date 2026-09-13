@@ -1,7 +1,8 @@
 import { Box, Text, useApp, useInput, useWindowSize } from 'ink'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toErrorPayload } from '../shared/errors.js'
-import { openImageViewer, playAudio } from '../shared/media-player.js'
+import { openImageViewer, openPath, playAudio } from '../shared/media-player.js'
+import { sendNotification } from '../shared/notify.js'
 import type { ChatSummary, ContactSummary, MeInfo, MessageRecord } from '../shared/protocol.js'
 import { call, subscribe, type Subscription } from '../cli/ipc-client.js'
 import type { EventFrame } from '../shared/protocol.js'
@@ -17,6 +18,8 @@ import {
   indexOfChat,
   mergeMessages,
   moveSelection,
+  nextPane,
+  previewText,
   sortChats,
   unreadTotal,
   visibleWindow,
@@ -25,12 +28,15 @@ import {
 const PAGE_SIZE = 100
 const STATUS_TTL_MS = 4000
 
+/** Voice notes and audio are played (`p`), not opened as files (`v`). */
+function isAudioPath(path: string): boolean {
+  return /\.(ogg|opus|mp3|m4a|wav|aac)$/i.test(path)
+}
+
 export interface AppProps {
   me: MeInfo | null
   initialConnection: string
 }
-
-const PANE_ORDER: Pane[] = ['list', 'messages', 'composer']
 
 export function App({ me, initialConnection }: AppProps) {
   const { exit } = useApp()
@@ -54,6 +60,10 @@ export function App({ me, initialConnection }: AppProps) {
   openChatRef.current = openChatJid
   const messagesRef = useRef<MessageRecord[]>([])
   messagesRef.current = messages
+  // Guards against a slow `read` for a previous chat landing after a newer one.
+  const readTokenRef = useRef(0)
+  const prevConnectionRef = useRef(initialConnection)
+  const contactMapRef = useRef<Record<string, string>>({})
 
   const loadContacts = useCallback(async () => {
     try {
@@ -66,7 +76,8 @@ export function App({ me, initialConnection }: AppProps) {
 
   const loadChats = useCallback(async () => {
     try {
-      const loaded = await call<{ chats: ChatSummary[] }>('chats', { limit: 200 })
+      // No limit: every known chat (including quiet groups) must be reachable.
+      const loaded = await call<{ chats: ChatSummary[] }>('chats', {})
       setChats(sortChats(loaded.chats))
     } catch (error) {
       setStatus(toErrorPayload(error).message)
@@ -76,28 +87,38 @@ export function App({ me, initialConnection }: AppProps) {
   const contactMap = useMemo(() => {
     const map: Record<string, string> = {}
     for (const c of contacts) {
-      if (c.name) map[c.jid] = c.name
+      const name = c.name ?? c.notify
+      if (name) map[c.jid] = name
     }
     for (const ch of chats) {
       if (ch.name && !map[ch.jid]) map[ch.jid] = ch.name
     }
     return map
   }, [contacts, chats])
+  contactMapRef.current = contactMap
 
   const openChat = useCallback(async (jid: string) => {
+    const token = readTokenRef.current + 1
+    readTokenRef.current = token
     setOpenChatJid(jid)
     setOffset(0)
+    // Drop the previous chat's messages immediately: never show a stale
+    // conversation under the new title while the read is in flight.
+    setMessages([])
+    setHasMoreOlder(false)
     setPane('messages')
     try {
       const result = await call<{ messages: MessageRecord[] }>('read', {
         chat: jid,
         limit: PAGE_SIZE,
       })
+      if (readTokenRef.current !== token) return
       setMessages(result.messages)
       setHasMoreOlder(result.messages.length === PAGE_SIZE)
       // `read` marks the chat read on the daemon; mirror that locally.
       setChats((current) => clearUnread(current, jid))
     } catch (error) {
+      if (readTokenRef.current !== token) return
       setStatus(toErrorPayload(error).message)
       setMessages([])
     }
@@ -108,6 +129,7 @@ export function App({ me, initialConnection }: AppProps) {
     const current = messagesRef.current
     if (!jid || current.length === 0 || loadingOlder || !hasMoreOlder) return
 
+    const token = readTokenRef.current
     setLoadingOlder(true)
     try {
       const oldest = current[0]!.ts
@@ -116,6 +138,7 @@ export function App({ me, initialConnection }: AppProps) {
         limit: PAGE_SIZE,
         before: oldest,
       })
+      if (readTokenRef.current !== token) return
       if (result.messages.length > 0) {
         setMessages((existing) => mergeMessages(existing, result.messages))
         setOffset((cur) => cur + result.messages.length)
@@ -125,6 +148,7 @@ export function App({ me, initialConnection }: AppProps) {
         result.messages.length === 0 ? 'no more history' : `loaded ${result.messages.length} older`,
       )
     } catch (error) {
+      if (readTokenRef.current !== token) return
       setStatus(toErrorPayload(error).message)
     } finally {
       setLoadingOlder(false)
@@ -152,7 +176,7 @@ export function App({ me, initialConnection }: AppProps) {
 
     void (async () => {
       try {
-        const loaded = await call<{ chats: ChatSummary[] }>('chats', { limit: 200 })
+        const loaded = await call<{ chats: ChatSummary[] }>('chats', {})
         if (!cancelled) setChats(sortChats(loaded.chats))
         const cLoaded = await call<{ contacts: ContactSummary[] }>('contacts', {})
         if (!cancelled) setContacts(cLoaded.contacts)
@@ -165,15 +189,19 @@ export function App({ me, initialConnection }: AppProps) {
       if (frame.event === 'status') {
         const data = frame.data as { connection?: string }
         if (data.connection) {
+          const wasOpen = prevConnectionRef.current === 'open'
+          prevConnectionRef.current = data.connection
           setConnection(data.connection)
-          // Autosync messages and chats when internet reconnects
+          // Reload chats/contacts whenever the connection (re)opens. The daemon
+          // re-broadcasts after a group sync, so freshly discovered groups and
+          // member names show up without a manual `s`.
           if (data.connection === 'open') {
             void loadChats()
             void loadContacts()
             if (openChatRef.current) {
               void openChat(openChatRef.current)
             }
-            setStatus('reconnected · synced')
+            if (!wasOpen) setStatus('reconnected · synced')
           }
         }
         return
@@ -184,6 +212,10 @@ export function App({ me, initialConnection }: AppProps) {
       const open = openChatRef.current
 
       setChats((current) => applyIncomingChat(current, record, open))
+      if (!record.fromMe && record.chat !== open) {
+        const label = contactMapRef.current[record.chat] ?? record.chatName ?? record.chat
+        sendNotification(label, previewText(record.text ?? '', 60))
+      }
       if (record.chat !== open) return
 
       setMessages((current) => mergeMessages(current, [record]))
@@ -229,12 +261,9 @@ export function App({ me, initialConnection }: AppProps) {
         case 'quit':
           exit()
           return
-        case 'focus-next': {
-          const index = PANE_ORDER.indexOf(pane)
-          const next = PANE_ORDER[(index + 1) % PANE_ORDER.length] ?? 'list'
-          setPane(next === 'messages' && !openChatRef.current ? 'list' : next)
+        case 'focus-next':
+          setPane((current) => nextPane(current, Boolean(openChatRef.current)))
           return
-        }
         case 'focus-list':
           setPane('list')
           return
@@ -303,21 +332,27 @@ export function App({ me, initialConnection }: AppProps) {
         }
         case 'view-media': {
           const curMsgs = messagesRef.current
-          if (curMsgs.length === 0) return
-          const win = visibleWindow(curMsgs, offset, layout.mainHeight)
-          const imgMsg = [...win.items].reverse().find(
-            (m) =>
-              m.type === 'imageMessage' ||
-              Boolean(m.mediaPath && m.mediaPath.match(/\.(jpe?g|png|webp|gif)$/i)),
-          )
-          if (imgMsg?.mediaPath) {
-            setStatus(`viewing image: ${imgMsg.mediaPath.split('/').pop()}`)
-            openImageViewer(imgMsg.mediaPath).catch((err) => {
-              setStatus(`viewer error: ${(err as Error).message}`)
-            })
-          } else {
-            setStatus('no image in view')
+          if (curMsgs.length === 0) {
+            setStatus('no file in view')
+            return
           }
+          const win = visibleWindow(curMsgs, offset, layout.mainHeight)
+          const target = [...win.items]
+            .reverse()
+            .find((m) => Boolean(m.mediaPath) && !isAudioPath(m.mediaPath as string))
+          const mediaPath = target?.mediaPath
+          if (!mediaPath) {
+            setStatus('no file in view')
+            return
+          }
+          const isImage =
+            target.type === 'imageMessage' || /\.(jpe?g|png|webp|gif)$/i.test(mediaPath)
+          const label = mediaPath.split('/').pop() ?? mediaPath
+          setStatus(`${isImage ? 'viewing image' : 'opening'}: ${label}`)
+          const open = isImage ? openImageViewer : openPath
+          open(mediaPath).catch((err) => {
+            setStatus(`${isImage ? 'viewer' : 'open'} error: ${(err as Error).message}`)
+          })
           return
         }
       }
@@ -381,6 +416,7 @@ export function App({ me, initialConnection }: AppProps) {
             isFocused={pane === 'list'}
             width={layout.listWidth}
             height={layout.mainHeight}
+            contactNames={contactMap}
           />
           <MessagePane
             messages={messages}

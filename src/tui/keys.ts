@@ -75,7 +75,8 @@ export function resolveKey(input: string, key: KeyLike, pane: Pane): Action | nu
   if (input === 'o') return { type: 'load-older' }
   if (input === 'p') return { type: 'play-media' }
   if (input === 'v') return { type: 'view-media' }
-  if (input === 'i' || key.return) return { type: 'focus-composer' }
+  // Writing is entered only with `i`; esc leaves it again.
+  if (input === 'i') return { type: 'focus-composer' }
   return NONE
 }
 
@@ -84,8 +85,8 @@ export function hintsFor(pane: Pane, atNewest: boolean): string {
   if (pane === 'composer') return 'enter send · esc back · ctrl+c quit'
   if (pane === 'messages') {
     return atNewest
-      ? 'j/k scroll · p play · v view · i write · q quit'
-      : 'j/k scroll · G newest · p play · v view · q quit'
+      ? 'j/k scroll · i write · tab chats · p play · v open · q quit'
+      : 'j/k scroll · G newest · i write · p play · v open · q quit'
   }
-  return 'j/k move · enter open · / search · s sync · q quit'
+  return 'j/k move · enter open · tab chat · / search · s sync · q quit'
 }

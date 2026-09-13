@@ -256,3 +256,126 @@ test('listContacts filters by name and phone', async () => {
   assert.equal(byPhone.length, 1)
   assert.equal(byPhone[0]!.notify, 'Dave')
 })
+
+test('hides status broadcasts and protocol-only records', async () => {
+  const { store } = makeStore()
+  store.append(record({ id: 'status', chat: 'status@broadcast', type: 'unknown', text: '[unknown]' }))
+  store.append(record({ id: 'sys', type: 'protocolMessage', text: '[system]' }))
+  store.append(record({ id: 'keys', type: 'senderKeyDistributionMessage', text: '[keys]' }))
+  store.append(record({ id: 'real', text: 'real message' }))
+
+  const chats = store.listChats()
+  assert.equal(chats.length, 1)
+  assert.equal(chats[0]!.jid, '628111@s.whatsapp.net')
+
+  const messages = await store.messages({})
+  assert.deepEqual(
+    messages.map((m) => m.id),
+    ['real'],
+  )
+
+  const found = await store.search('unknown')
+  assert.equal(found.length, 0)
+})
+
+test('links a LID and a phone number into one chat with unified messages', async () => {
+  const { store } = makeStore()
+  store.append(record({ id: 'a', chat: '111@lid', chatName: null, from: '111@lid', fromName: 'derila', ts: 100 }))
+  store.append(
+    record({
+      id: 'b',
+      chat: '628111@s.whatsapp.net',
+      chatName: null,
+      from: '628111@s.whatsapp.net',
+      ts: 200,
+      text: 'phone msg',
+    }),
+  )
+  assert.equal(store.listChats().length, 2)
+
+  store.linkJids(['111@lid', '628111@s.whatsapp.net'])
+
+  const chats = store.listChats()
+  assert.equal(chats.length, 1)
+  assert.equal(chats[0]!.jid, '628111@s.whatsapp.net')
+  assert.equal(chats[0]!.lastText, 'phone msg')
+  assert.equal(store.canonicalJid('111@lid'), '628111@s.whatsapp.net')
+  assert.deepEqual(store.jidVariants('111@lid').sort(), ['111@lid', '628111@s.whatsapp.net'])
+
+  assert.equal((await store.messages({ chat: '628111@s.whatsapp.net' })).length, 2)
+  // Looking the chat up by either identity returns the same conversation.
+  assert.deepEqual(
+    (await store.messages({ chat: '111@lid' })).map((m) => m.id),
+    ['a', 'b'],
+  )
+})
+
+test('merging identities keeps the known name and sums unread', () => {
+  const { store } = makeStore()
+  store.setContact('111@lid', { fullName: 'derila' })
+  store.append(record({ id: 'x', chat: '111@lid', chatName: null, from: '111@lid', ts: 100 }))
+  store.append(
+    record({ id: 'y', chat: '628111@s.whatsapp.net', chatName: null, from: '628111@s.whatsapp.net', ts: 200 }),
+  )
+
+  store.linkJids(['111@lid', '628111@s.whatsapp.net'])
+
+  const chat = store.listChats()[0]!
+  assert.equal(chat.name, 'derila')
+  assert.equal(chat.unread, 2)
+  assert.equal(store.contactName('628111@s.whatsapp.net'), 'derila')
+})
+
+test('persists identity aliases across a reload', async () => {
+  const first = makeStore()
+  first.store.append(record({ id: 'a', chat: '111@lid', from: '111@lid', chatName: 'derila', ts: 100 }))
+  first.store.append(record({ id: 'b', chat: '628111@s.whatsapp.net', from: '628111@s.whatsapp.net', ts: 200 }))
+  first.store.linkJids(['111@lid', '628111@s.whatsapp.net'])
+  first.store.flushSnapshot()
+
+  const reloaded = new Store(first.messagesFile, first.chatsFile)
+  await reloaded.load()
+
+  assert.equal(reloaded.listChats().length, 1)
+  assert.equal(reloaded.canonicalJid('111@lid'), '628111@s.whatsapp.net')
+  assert.equal((await reloaded.messages({ chat: '111@lid' })).length, 2)
+})
+
+test('directPhoneJids lists only unlinked phone-number chats', () => {
+  const { store } = makeStore()
+  store.touchChat('628111@s.whatsapp.net', { name: 'Alice' })
+  store.touchChat('111@lid', { name: 'Bob' })
+  store.touchChat('120363@g.us', { name: 'Group' })
+  store.touchChat('628999@s.whatsapp.net', { name: 'Carol' })
+  assert.deepEqual(store.directPhoneJids().sort(), ['628111@s.whatsapp.net', '628999@s.whatsapp.net'])
+
+  // Once an identity is linked it is no longer a lookup candidate.
+  store.linkJids(['628111@s.whatsapp.net', '111@lid'])
+  assert.deepEqual(store.directPhoneJids(), ['628999@s.whatsapp.net'])
+})
+
+test('listContacts hides anonymous LID group-member entries', () => {
+  const { store } = makeStore()
+  store.setContact('111@lid', { fullName: null, notify: null })
+  store.setContact('628222@s.whatsapp.net', { fullName: null, notify: null })
+  store.setContact('222@lid', { fullName: 'Named LID' })
+
+  const jids = store.listContacts().map((c) => c.jid)
+  assert.ok(!jids.includes('111@lid'))
+  assert.ok(jids.includes('628222@s.whatsapp.net'))
+  assert.ok(jids.includes('222@lid'))
+})
+
+test('hides our own self-chat from the chat list', () => {
+  const { store } = makeStore()
+  store.touchChat('6285156176098@s.whatsapp.net', {})
+  store.touchChat('111@lid', { name: 'Self LID' })
+  store.linkJids(['6285156176098@s.whatsapp.net', '111@lid'])
+  store.touchChat('628999@s.whatsapp.net', { name: 'Friend' })
+
+  store.setSelfJid('111@lid')
+
+  const jids = store.listChats().map((c) => c.jid)
+  assert.ok(!jids.includes('6285156176098@s.whatsapp.net'))
+  assert.ok(jids.includes('628999@s.whatsapp.net'))
+})

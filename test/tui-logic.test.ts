@@ -6,9 +6,11 @@ import {
   clampOffset,
   clearUnread,
   displayName,
+  fitMessages,
   indexOfChat,
   mergeMessages,
   moveSelection,
+  nextPane,
   previewText,
   shortTime,
   sortChats,
@@ -235,4 +237,30 @@ test('displayName falls back to the jid local part', () => {
   assert.equal(displayName('628111@s.whatsapp.net', 'Budi'), 'Budi')
   assert.equal(displayName('628111@s.whatsapp.net', null), '628111')
   assert.equal(displayName('628111@s.whatsapp.net', '   '), '628111')
+})
+
+test('nextPane toggles between the chat list and the chat room', () => {
+  assert.equal(nextPane('list', true), 'messages')
+  assert.equal(nextPane('messages', true), 'list')
+  // With no chat open, tab stays on the list instead of showing an empty room.
+  assert.equal(nextPane('list', false), 'list')
+  // Leaving the composer returns to the list.
+  assert.equal(nextPane('composer', true), 'list')
+})
+
+test('fitMessages keeps only the newest messages that fit', () => {
+  const messages = Array.from({ length: 10 }, (_, i) => msg({ id: `m${i}`, ts: i, text: 'short' }))
+  // Two rows per plain message; a 5-row budget fits the newest two.
+  assert.deepEqual(
+    fitMessages(messages, 5, 60).map((m) => m.id),
+    ['m8', 'm9'],
+  )
+})
+
+test('fitMessages always renders at least one message', () => {
+  const long = msg({ id: 'long', text: 'x'.repeat(2000) })
+  assert.deepEqual(
+    fitMessages([long], 3, 20).map((m) => m.id),
+    ['long'],
+  )
 })

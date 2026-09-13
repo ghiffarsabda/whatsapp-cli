@@ -158,20 +158,22 @@ You can send media from the CLI or directly from within the TUI composer:
 | | `o` | Load older history |
 | | `G` | Jump to newest messages |
 | | `p` | Play selected/latest voice note |
-| | `v` | View selected/latest image |
-| | `i` or `enter` | Jump to composer |
+| | `v` | View/open selected/latest image or document |
+| | `i` | Write a reply (only `i` enters the composer; `esc` leaves it) |
 | | `q` | Quit |
 | **Composer** | `enter` | Send message (supports `@voice`, `@image`, `@document`) |
 | | `esc` | Back to chat cards |
 | | `←`/`→` | Move caret |
 | | `ctrl+u` | Clear line |
-| **Anywhere** | `tab` | Cycle pane focus |
+| **Anywhere** | `tab` | Toggle chat list ⇄ chat room |
 | | `ctrl+c` | Force quit |
 
 Notes:
 
 - It needs a real terminal. Piped or redirected invocations exit `2` rather than loading React, and `--json` is rejected for the same reason.
 - Incoming messages stream in over the daemon's existing subscription, so the chat list re-sorts and unread badges update live. A chat you have open never counts as unread.
+- Messages for chats you are not looking at raise a desktop notification (`notify-send` on Linux, `osascript` on macOS, terminal bell elsewhere). Set `WHATSAPP_CLI_NO_NOTIFY=1` to silence them.
+- Received images, documents, voice notes and audio are downloaded on arrival, so `v` opens PDFs/docs in your default app and `p` plays voice notes.
 - It refuses to start when not logged in (exit `3`); run `wa login` first.
 - Messages are held in memory per chat (newest 300) and marked read through the daemon, so the same history shows up in `wa read` afterwards.
 
@@ -245,6 +247,7 @@ The files worth reading first are `src/cli/output.ts` (the agent-facing contract
 ## Features
 
 - **Text & Media**: Supports text messages, voice notes (`.ogg`/`.mp3` with opus/ptt), images, and documents.
+- **One identity per person**: WhatsApp addresses the same contact by both a phone number (`@s.whatsapp.net`) and an anonymous LID (`@lid`). The daemon discovers the pair from message keys, contact records, group metadata and `onWhatsApp`, then merges them — so a conversation never splits across two chat rooms.
 - **Group & Direct Chat History**: Group subjects, participating chats, and contact names are automatically indexed and synced across restarts.
 - **Snappy Terminal UI**: Visual chat cards, instant contact fuzzy finder modal, terminal hyperlinks (Ctrl+Click), and hotkeys for media playback (`p`) and viewing (`v`).
 - **Resilient & Reconnecting**: Auto-syncs missed events upon network reconnection; credentials and message stores survive daemon restarts.

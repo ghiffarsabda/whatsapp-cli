@@ -8,9 +8,17 @@ export interface ChatListProps {
   isFocused: boolean
   width: number
   height: number
+  contactNames?: Record<string, string>
 }
 
-export function ChatList({ chats, selectedIndex, isFocused, width, height }: ChatListProps) {
+export function ChatList({
+  chats,
+  selectedIndex,
+  isFocused,
+  width,
+  height,
+  contactNames,
+}: ChatListProps) {
   // Height available inside outer container
   const innerHeight = Math.max(1, height - 2)
   const cardHeight = height >= 14 ? 3 : 2
@@ -38,7 +46,7 @@ export function ChatList({ chats, selectedIndex, isFocused, width, height }: Cha
         visible.map((chat, index) => {
           const absolute = first + index
           const selected = absolute === selectedIndex
-          const name = displayName(chat.jid, chat.name)
+          const name = contactNames?.[chat.jid] ?? displayName(chat.jid, chat.name)
           const unread = chat.unread > 0 ? ` (${chat.unread})` : ''
 
           return (

@@ -153,7 +153,8 @@ const COMMANDS: CommandSpec[] = [
     output: 'None. Paints the terminal and restores it on exit.',
     notes: [
       'Requires an interactive TTY; exits 2 when piped or redirected.',
-      'Keys: j/k move · enter open · i write · o load older · tab pane · q quit.',
+      'Keys: j/k move · enter open · tab toggles list/chat · i write · esc back · p play · v open · q quit.',
+      'Inbound images, documents and audio are downloaded; notifications fire for chats you are not viewing (WHATSAPP_CLI_NO_NOTIFY=1 to silence).',
     ],
     exitCodes: [0, 2, 3, 4],
   },

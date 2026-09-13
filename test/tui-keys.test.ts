@@ -68,6 +68,10 @@ test('writing is reachable from both panes', () => {
   assert.deepEqual(resolveKey('i', noKey, 'list'), { type: 'focus-composer' })
 })
 
+test('enter does not enter the composer from the message pane', () => {
+  assert.equal(resolveKey('', { return: true }, 'messages'), null)
+})
+
 test('contact search, sync, and media actions are reachable', () => {
   assert.deepEqual(resolveKey('/', noKey, 'list'), { type: 'search-contacts' })
   assert.deepEqual(resolveKey('n', noKey, 'list'), { type: 'search-contacts' })

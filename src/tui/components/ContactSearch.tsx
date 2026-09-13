@@ -19,6 +19,10 @@ export interface ContactSearchProps {
   onClose: () => void
 }
 
+function localPart(jid: string): string {
+  return jid.split('@')[0] ?? jid
+}
+
 export function ContactSearch({
   contacts,
   chats,
@@ -30,31 +34,35 @@ export function ContactSearch({
   const [query, setQuery] = useState('')
   const [selectedIndex, setSelectedIndex] = useState(0)
 
-  // Merge unique entries across contacts and chats
+  // Merge unique entries across contacts and chats, keeping the best name from
+  // any source (saved name, push name, group subject, or the JID itself).
   const items = useMemo(() => {
     const map = new Map<string, ContactSearchItem>()
 
-    for (const c of contacts) {
-      const name = c.name ?? c.notify ?? c.phone ?? c.jid.split('@')[0] ?? c.jid
-      const subtitle = c.phone ? `+${c.phone}` : c.jid
-      map.set(c.jid, {
-        jid: c.jid,
-        name,
-        subtitle,
-        isGroup: c.isGroup,
+    const add = (jid: string, name: string | null | undefined, subtitle: string, isGroup: boolean) => {
+      const existing = map.get(jid)
+      const clean = name && name.trim() !== '' ? name.trim() : null
+      map.set(jid, {
+        jid,
+        name: clean ?? existing?.name ?? localPart(jid),
+        subtitle:
+          existing?.subtitle && existing.subtitle !== existing.name ? existing.subtitle : subtitle,
+        isGroup: existing?.isGroup || isGroup,
       })
     }
 
+    for (const c of contacts) {
+      const subtitle = c.phone ? `+${c.phone}` : c.isGroup ? 'Group' : c.jid
+      add(c.jid, c.name ?? c.notify, subtitle, c.isGroup)
+    }
+
     for (const chat of chats) {
-      if (!map.has(chat.jid)) {
-        const name = chat.name ?? chat.jid.split('@')[0] ?? chat.jid
-        map.set(chat.jid, {
-          jid: chat.jid,
-          name,
-          subtitle: chat.jid,
-          isGroup: chat.isGroup,
-        })
-      }
+      const subtitle = chat.isGroup
+        ? 'Group'
+        : chat.jid.includes('@s.whatsapp.net')
+          ? `+${localPart(chat.jid)}`
+          : chat.jid
+      add(chat.jid, chat.name, subtitle, chat.isGroup)
     }
 
     let list = [...map.values()]

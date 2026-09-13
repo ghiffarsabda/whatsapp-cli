@@ -129,6 +129,7 @@ async function main(): Promise<void> {
         void shutdown(0, 'requested via ipc')
       },
       subscriberCount: () => ipc?.subscriberCount ?? 0,
+      resolveMedia: (chat, messageId) => connection.findLocalMedia(chat, messageId),
     }),
   )
   await ipc.start()

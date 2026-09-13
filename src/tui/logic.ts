@@ -1,5 +1,6 @@
 import type { ChatSummary, MessageRecord } from '../shared/protocol.js'
 import { isGroupJid } from '../shared/jid.js'
+import type { Pane } from './keys.js'
 
 /** Newest messages kept in memory per chat. Older pages are dropped as they scroll off. */
 export const MESSAGE_CAP = 300
@@ -80,6 +81,37 @@ export function moveSelection(index: number, delta: number, count: number): numb
   if (!Number.isFinite(index)) return 0
   const next = (Math.trunc(index) + delta) % count
   return next < 0 ? next + count : next
+}
+
+/** Rough number of terminal rows a message will occupy when wrapped at `width`. */
+export function estimateMessageHeight(message: MessageRecord, width: number): number {
+  const inner = Math.max(1, width - 2)
+  const text = (message.text ?? '').replace(/\s+/g, ' ').trim()
+  const textRows = Math.min(8, Math.max(1, Math.ceil(text.length / inner)))
+  const mediaRows = message.mediaPath ? 1 : 0
+  return 1 + textRows + mediaRows
+}
+
+/**
+ * Trim a window to the newest messages whose estimated heights fit `height`
+ * rows. Rendering only what fits keeps the pane from overflowing (and visually
+ * glitching) when a long message arrives. Always keeps at least one message.
+ */
+export function fitMessages(
+  messages: MessageRecord[],
+  height: number,
+  width: number,
+): MessageRecord[] {
+  const budget = Math.max(1, Math.trunc(height))
+  let used = 0
+  let start = messages.length
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const rows = estimateMessageHeight(messages[i]!, width)
+    if (used + rows > budget && start < messages.length) break
+    used += rows
+    start = i
+  }
+  return messages.slice(start)
 }
 
 /** Chat list ordering: most recent activity first. */
@@ -163,4 +195,13 @@ export function displayName(jid: string, name?: string | null): string {
   if (name && name.trim() !== '') return name
   const [local] = jid.split('@')
   return local ?? jid
+}
+
+/**
+ * Tab toggles between the chat list and the open chat room. It never focuses
+ * the composer (that is `i`), and with no chat open it stays on the list.
+ */
+export function nextPane(pane: Pane, hasOpenChat: boolean): Pane {
+  if (pane === 'list') return hasOpenChat ? 'messages' : 'list'
+  return 'list'
 }

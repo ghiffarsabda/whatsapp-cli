@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
   contentTypeOf,
+  isNoiseContent,
   placeholderFor,
   recordFromMessage,
   textFromContent,
@@ -148,4 +149,56 @@ test('unwrapContent is safe on deeply nested and empty input', () => {
   assert.equal(unwrapContent(null), null)
   assert.equal(unwrapContent(undefined), null)
   assert.deepEqual(unwrapContent({ conversation: 'x' }), { conversation: 'x' })
+})
+
+test('isNoiseContent identifies internal protocol envelopes', () => {
+  assert.equal(isNoiseContent({ conversation: 'hi' }), false)
+  assert.equal(isNoiseContent({ imageMessage: {} }), false)
+  assert.equal(isNoiseContent({ senderKeyDistributionMessage: {} }), true)
+  assert.equal(isNoiseContent({ protocolMessage: {} }), true)
+  assert.equal(isNoiseContent(null), true)
+})
+
+test('recordFromMessage skips status broadcasts and protocol noise', () => {
+  assert.equal(
+    recordFromMessage({
+      key: { id: 'S1', remoteJid: 'status@broadcast' },
+      message: { conversation: 'my status' },
+    }),
+    null,
+  )
+  assert.equal(
+    recordFromMessage({
+      key: { id: 'K1', remoteJid: '120363@g.us' },
+      message: { senderKeyDistributionMessage: { groupId: '120363@g.us' } },
+    }),
+    null,
+  )
+  assert.equal(
+    recordFromMessage({
+      key: { id: 'P1', remoteJid: '628111@s.whatsapp.net' },
+      message: { protocolMessage: { type: 3 } },
+    }),
+    null,
+  )
+  assert.equal(
+    recordFromMessage({
+      key: { id: 'U1', remoteJid: '628111@s.whatsapp.net' },
+      message: { messageContextInfo: { deviceListMetadata: {} } },
+    }),
+    null,
+  )
+})
+
+test('recordFromMessage keeps documents and captures the file name', () => {
+  const message: IncomingMessage = {
+    key: { id: 'DOC', remoteJid: '628111@s.whatsapp.net' },
+    message: { documentMessage: { fileName: 'invoice.pdf', mimetype: 'application/pdf' } },
+    messageTimestamp: 1700000000,
+  }
+  const record = recordFromMessage(message)
+  assert.equal(record?.type, 'documentMessage')
+  assert.equal(record?.text, '[document: invoice.pdf]')
+  assert.equal(record?.fileName, 'invoice.pdf')
+  assert.equal(record?.mimetype, 'application/pdf')
 })

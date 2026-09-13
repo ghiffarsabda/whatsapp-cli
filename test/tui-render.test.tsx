@@ -309,3 +309,57 @@ test('MessagePane renders media indicators for voice notes and images', () => {
   assert.match(frame, /press 'v'/)
 })
 
+test('ChatList prefers a contact/group name over a bare jid', () => {
+  const { lastFrame } = render(
+    <ChatList
+      chats={[chat({ jid: '120363@g.us', name: null, isGroup: true })]}
+      selectedIndex={0}
+      isFocused
+      width={34}
+      height={10}
+      contactNames={{ '120363@g.us': 'Weekend Hikers' }}
+    />,
+  )
+  assert.match(lastFrame() ?? '', /Weekend Hikers/)
+})
+
+test('ContactSearch finds groups by name and opens them', async () => {
+  const chats = [chat({ jid: '120363@g.us', name: 'Weekend Hikers', isGroup: true })]
+  let selected = ''
+  const { stdin, lastFrame } = render(
+    <ContactSearch
+      contacts={[]}
+      chats={chats}
+      width={60}
+      height={15}
+      onSelect={(jid) => {
+        selected = jid
+      }}
+      onClose={() => {}}
+    />,
+  )
+  stdin.write('hikers')
+  await new Promise((resolve) => setTimeout(resolve, 60))
+  assert.match(lastFrame() ?? '', /Weekend Hikers/)
+  stdin.write('\r')
+  await new Promise((resolve) => setTimeout(resolve, 60))
+  assert.equal(selected, '120363@g.us')
+})
+
+test('ContactSearch falls back to a contact push name', () => {
+  const contacts = [
+    { jid: '628222@s.whatsapp.net', name: null, notify: 'Dave', phone: '628222', isGroup: false },
+  ]
+  const { lastFrame } = render(
+    <ContactSearch
+      contacts={contacts}
+      chats={[]}
+      width={60}
+      height={15}
+      onSelect={() => {}}
+      onClose={() => {}}
+    />,
+  )
+  assert.match(lastFrame() ?? '', /Dave/)
+})
+

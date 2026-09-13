@@ -1,5 +1,5 @@
 import type { MessageRecord } from '../shared/protocol.js'
-import { isGroupJid, numberFromJid } from '../shared/jid.js'
+import { isGroupJid, isIgnoredJid, numberFromJid } from '../shared/jid.js'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type Content = Record<string, any>
@@ -10,6 +10,11 @@ export interface IncomingMessage {
     remoteJid?: string | null
     fromMe?: boolean | null
     participant?: string | null
+    /** WhatsApp's alternate identities for the same person (LID <-> phone). */
+    senderPn?: string | null
+    senderLid?: string | null
+    participantPn?: string | null
+    participantLid?: string | null
   } | null
   message?: Content | null
   messageTimestamp?: number | bigint | { toNumber(): number } | null
@@ -63,6 +68,28 @@ export function contentTypeOf(content: Content | null | undefined): string {
     (candidate) => candidate.endsWith('Message') || candidate === 'conversation',
   )
   return key ?? 'unknown'
+}
+
+/**
+ * Protocol plumbing (key distribution, receipts, revokes) that has no
+ * user-visible body. Storing it just fills the chat with `[system]`/`[unknown]`
+ * noise that pops up "all of a sudden".
+ */
+const INTERNAL_CONTENT_TYPES = new Set([
+  'senderKeyDistributionMessage',
+  'protocolMessage',
+  'messageContextInfo',
+])
+
+/** True when a message carries nothing a user would want to see. */
+export function isNoiseContent(content: Content | null | undefined): boolean {
+  const type = contentTypeOf(content)
+  return type === 'unknown' || INTERNAL_CONTENT_TYPES.has(type)
+}
+
+/** Same check for an already-stored record, whose `type` is the content type. */
+export function isNoiseType(type: string): boolean {
+  return type === 'unknown' || INTERNAL_CONTENT_TYPES.has(type)
 }
 
 /** Human-readable text for any message, or null when it has none. */
@@ -121,6 +148,7 @@ export interface RecordOptions {
   chatName?: string | null
   meJid?: string | null
   meName?: string | null
+  fromName?: string | null
   mediaPath?: string | null
 }
 
@@ -131,8 +159,16 @@ export function recordFromMessage(
   if (!isStorable(msg)) return null
 
   const chat = msg.key!.remoteJid as string
+  // Status updates and broadcast lists are not conversations.
+  if (isIgnoredJid(chat)) return null
+  // Key distribution / protocol envelopes carry no user-visible message.
+  if (isNoiseContent(msg.message)) return null
+
   const fromMe = Boolean(msg.key!.fromMe)
-  const participant = msg.key!.participant ?? null
+  const participant =
+    msg.key!.participant ??
+    (msg as unknown as { participant?: string })?.participant ??
+    null
   const from = fromMe ? options.meJid ?? chat : isGroupJid(chat) ? participant ?? chat : chat
 
   const contextInfo = contextInfoOf(msg.message)
@@ -163,7 +199,7 @@ export function recordFromMessage(
     chat,
     chatName: effectiveChatName,
     from,
-    fromName: fromMe ? options.meName ?? null : msg.pushName ?? null,
+    fromName: fromMe ? options.meName ?? null : options.fromName ?? msg.pushName ?? null,
     fromMe,
     ts: toEpochSeconds(msg.messageTimestamp),
     type: text === null ? contentTypeOf(msg.message) : 'text',

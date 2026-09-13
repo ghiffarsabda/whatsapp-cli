@@ -1,6 +1,6 @@
 import type { ErrorPayload } from './errors.js'
 
-export const PROTOCOL_VERSION = 1
+export const PROTOCOL_VERSION = 2
 
 export type ConnectionStatus = 'connecting' | 'open' | 'close' | 'logged_out'
 
